@@ -93,9 +93,11 @@ public final class SettingsActivity extends WheelActivity {
         String[] labels=new String[max-min+1]; for(int n=0;n<labels.length;n++) labels[n]=Integer.toString(min+n);
         choose(title,labels,Math.max(0,Math.min(labels.length-1,current-min)),new Choice(){ public void apply(int n){ change.apply(min+n); }});
     }
+    // The supported Y1 firmware is API 17, before Wi-Fi required runtime location permission.
+    @android.annotation.SuppressLint("MissingPermission")
     private void wifiMenu() {
         show(new Menu("Wi-Fi") { List<Item> items(){
-            final WifiManager wifi=(WifiManager)getSystemService(WIFI_SERVICE); note="New network passwords: configure over USB.\n"+(wifi.isWifiEnabled()?wifi.getConnectionInfo().getSSID():"Wi-Fi is off");
+            final WifiManager wifi=(WifiManager)getApplicationContext().getSystemService(WIFI_SERVICE); note="New network passwords: configure over USB.\n"+(wifi.isWifiEnabled()?wifi.getConnectionInfo().getSSID():"Wi-Fi is off");
             List<Item> r=new ArrayList<Item>(); r.add(row(wifi.isWifiEnabled()?"Turn Wi-Fi off":"Turn Wi-Fi on",new Runnable(){ public void run(){ if(!wifi.setWifiEnabled(!wifi.isWifiEnabled())) throw new IllegalStateException(); onBackPressed(); }}));
             List<android.net.wifi.WifiConfiguration> saved=wifi.getConfiguredNetworks(); if(saved!=null) for(final android.net.wifi.WifiConfiguration network:saved) r.add(row("Connect: "+network.SSID,new Runnable(){ public void run(){ wifi.enableNetwork(network.networkId,true); wifi.reconnect(); onBackPressed(); }}));
             r.add(row("Back",new Runnable(){ public void run(){ onBackPressed(); }})); return r;

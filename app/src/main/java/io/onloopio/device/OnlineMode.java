@@ -8,7 +8,7 @@ import io.onloopio.api.ServerConfig;
 public final class OnlineMode {
     private final Context context; private final DeviceSettings settings;
     private volatile boolean reachable; private volatile long checkedAt;
-    public OnlineMode(Context context) { this.context=context; settings=new DeviceSettings(context); }
+    public OnlineMode(Context context) { this.context=context.getApplicationContext(); settings=new DeviceSettings(this.context); }
     public boolean homeWifi() {
         if(!Connectivity.wifiConnected(context)) return false;
         WifiInfo info=((WifiManager)context.getSystemService(Context.WIFI_SERVICE)).getConnectionInfo();

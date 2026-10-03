@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.Map;
 
 /** API-17 paired-device discovery and audio routing, controlled entirely by the wheel. */
+// The supported API-17 firmware grants the manifest's legacy Bluetooth permissions.
+@android.annotation.SuppressLint("MissingPermission")
 public final class BluetoothActivity extends WheelActivity {
     private BluetoothAdapter adapter;
     private BluetoothProfile audio;

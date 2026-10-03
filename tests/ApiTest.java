@@ -23,6 +23,7 @@ public final class ApiTest {
     static volatile String contentType="application/xml";
     static volatile int declaredExtra=0;
     static volatile boolean validAuth = true;
+    static volatile boolean closesConnections = true;
     static final Set<String> salts = new HashSet<String>();
     static int checks;
     static volatile Map<String,String> lastParams;
@@ -40,6 +41,7 @@ public final class ApiTest {
         HttpFixture fixture = new HttpFixture(new InetSocketAddress("127.0.0.1",0));
         fixture.createContext("/prefix/rest/",new HttpFixture.Handler() {
             public void handle(HttpFixture.Exchange exchange) throws IOException {
+                closesConnections &= "close".equalsIgnoreCase(exchange.getRequestHeaders().values.get("connection"));
                 Map<String,String> params = new HashMap<String,String>();
                 for (String part : exchange.getRequestURI().getRawQuery().split("&")) {
                     String[] kv=part.split("=",2); params.put(URLDecoder.decode(kv[0],"UTF-8"),URLDecoder.decode(kv[1],"UTF-8"));
@@ -113,6 +115,7 @@ public final class ApiTest {
                 declaredExtra=64; rejects(new Action(){ public void run() throws Exception { client.download("audio",partial,1024,null); }},"Truncated audio accepted"); check(!partial.exists(),"Truncated audio left partial"); declaredExtra=0;
             } finally { declaredExtra=0; partial.delete(); }
             check(validAuth,"UTF-8 auth, fresh salt per request, no cleartext password");
+            check(closesConnections,"Metadata, covers and audio requests release rather than pool sockets");
         } finally { fixture.stop(0); }
         System.out.println("API fixture checks passed: "+checks);
         String url = System.getenv("ONLOOPIO_URL");
