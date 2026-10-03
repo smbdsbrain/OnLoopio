@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug builds only: adb entry points so the emulator can be driven without wheel navigation. -->
+        <receiver android:name="io.onloopio.debug.DebugHooks" android:exported="true">
+            <intent-filter>
+                <action android:name="io.onloopio.debug.PLAY_LOCAL" />
+                <action android:name="io.onloopio.debug.SERVICE" />
+                <action android:name="io.onloopio.debug.PLAYER" />
+                <action android:name="io.onloopio.debug.LIBRARY" />
+                <action android:name="io.onloopio.debug.SCAN" />
+                <action android:name="io.onloopio.debug.FLAG" />
+                <action android:name="io.onloopio.debug.SEED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -312,6 +312,8 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
         final ServerConfig config=new ConfigStore(this).load(); if(config==null)return;
         downloadWorker.submit(new Runnable(){public void run(){try {new AudioCache(PlaybackService.this,config).clear(); main.post(new Runnable(){public void run(){message="Downloaded audio cleared.";publish();}});}catch(Exception failure){main.post(new Runnable(){public void run(){message="Cannot clear SD audio.";publish();}});}}});
     }
+    /** The spectrum effect idles with the screen off; the wheel and playback are unaffected. */
+    private boolean screenOn(){return ((android.os.PowerManager)getSystemService(POWER_SERVICE)).isScreenOn();}
     private void applyEffects() {
         if(equalizer!=null) {equalizer.release();equalizer=null;} int preset=settings.number("eq_preset",-1); if(!prepared || preset==-1) return;
         try {equalizer=new Equalizer(0,player.getAudioSessionId());
@@ -322,6 +324,7 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
     private void publish() {
         if(destroyed)return;
         boolean playing=prepared && player.isPlaying(); int position=prepared?player.getCurrentPosition():0, duration=prepared?player.getDuration():0;
+        Spectrum.sync(prepared?player.getAudioSessionId():0,playing && screenOn() && settings.flag("spectrum",true));
         state=new State(song,message,playing,busy,position,duration,nextSong,queue.isEmpty()?0:index+1,queue.size(),song!=null && store.isLiked(song.id));
         PendingIntent home=PendingIntent.getActivity(this,0,new Intent(this,PlaylistActivity.class).setAction("io.onloopio.OPEN_PLAYER"),PendingIntent.FLAG_UPDATE_CURRENT);
         Notification notification=new Notification.Builder(this).setSmallIcon(R.drawable.icon).setContentTitle(song==null?"OnLoopio":song.title).setContentText(message).setContentIntent(home).setOngoing(playing||busy).build();
@@ -331,7 +334,7 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
         if(settings.flag("cache_auto_clean",false) && android.os.SystemClock.elapsedRealtime()-lastCleanup>21600000)cleanCache(false);
         if(ControlLock.locked(PlaybackService.this))cancelPlayGesture();
         if(proxy!=null && (settings.flag("force_offline",false) || !online.homeWifi())) {recordProgress(false);player.reset();prepared=false;closeStream();message="Offline: stream stopped.";publish();}
-        if(prepared){recordProgress(false);int position=player.getCurrentPosition(),duration=player.getDuration();state=new State(song,message,player.isPlaying(),busy,position,duration,nextSong,queue.isEmpty()?0:index+1,queue.size(),song!=null && store.isLiked(song.id));}main.postDelayed(this,500);
+        if(prepared){Spectrum.sync(player.getAudioSessionId(),player.isPlaying() && screenOn() && settings.flag("spectrum",true));recordProgress(false);int position=player.getCurrentPosition(),duration=player.getDuration();state=new State(song,message,player.isPlaying(),busy,position,duration,nextSong,queue.isEmpty()?0:index+1,queue.size(),song!=null && store.isLiked(song.id));}main.postDelayed(this,500);
     }};
     public void onAudioFocusChange(int change) {
         if(change==AudioManager.AUDIOFOCUS_LOSS){resumeAfterFocus=false;pause();}
@@ -339,6 +342,6 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
         else if(change==AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK){if(prepared)player.setVolume(.2f,.2f);}
         else if(change==AudioManager.AUDIOFOCUS_GAIN){if(prepared)player.setVolume(1,1);if(resumeAfterFocus){resumeAfterFocus=false;startLocal();}}
     }
-    public void onDestroy(){recordProgress(false);cancelPlayGesture();destroyed=true;Log.i("OnLoopio","SERVICE_DESTROY");downloadGeneration++;generation++;main.removeCallbacksAndMessages(null);worker.shutdownNow();downloadWorker.shutdownNow();closeStream();if(equalizer!=null)equalizer.release();player.release();audio.abandonAudioFocus(this);audio.unregisterMediaButtonEventReceiver(buttons);audio.unregisterRemoteControlClient(remote);unregisterReceiver(noisy);unregisterReceiver(feedbackUpdated);store.close();stopForeground(true);state=new State(null,"Choose a track to play.",false,false,0,0);downloads=new DownloadState(null,0,-1,0,"Idle");protectedTracks=Collections.emptySet();super.onDestroy();}
+    public void onDestroy(){recordProgress(false);cancelPlayGesture();destroyed=true;Log.i("OnLoopio","SERVICE_DESTROY");downloadGeneration++;generation++;main.removeCallbacksAndMessages(null);worker.shutdownNow();downloadWorker.shutdownNow();closeStream();if(equalizer!=null)equalizer.release();Spectrum.release();player.release();audio.abandonAudioFocus(this);audio.unregisterMediaButtonEventReceiver(buttons);audio.unregisterRemoteControlClient(remote);unregisterReceiver(noisy);unregisterReceiver(feedbackUpdated);store.close();stopForeground(true);state=new State(null,"Choose a track to play.",false,false,0,0);downloads=new DownloadState(null,0,-1,0,"Idle");protectedTracks=Collections.emptySet();super.onDestroy();}
     public IBinder onBind(Intent intent){return null;}
 }

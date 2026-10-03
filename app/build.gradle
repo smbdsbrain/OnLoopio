@@ -2,6 +2,9 @@ plugins { id 'com.android.application' }
 android {
     namespace 'io.onloopio'
     testNamespace 'io.onloopio.tests'
+    useLibrary 'android.test.base'
+    useLibrary 'android.test.runner'
+    useLibrary 'android.test.mock'
     compileSdk 35
     defaultConfig {
         applicationId 'io.onloopio'
@@ -18,7 +21,7 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
     buildTypes {
-        debug { debuggable true }
+        debug { debuggable true; ndk { abiFilters 'armeabi-v7a', 'x86' } }
         release { debuggable false; minifyEnabled false }
     }
     lint { disable 'ExpiredTargetSdkVersion', 'OldTargetApi' }

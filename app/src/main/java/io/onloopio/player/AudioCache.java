@@ -35,12 +35,14 @@ public final class AudioCache {
     public List<String> legacyNames(){List<String> names=new java.util.ArrayList<String>();File[] files=legacy.listFiles();if(files!=null)for(File f:files)if(f.isFile() && f.length()>=16 && f.getName().matches("[0-9a-f]{64}\\.audio"))names.add(f.getName());return names;}
     public synchronized List<String> completedNames(){return new java.util.ArrayList<String>(completed);}
     public long freeBytes(){StatFs disk=new StatFs(root.getPath());return (long)disk.getAvailableBlocks()*disk.getBlockSize();}
+    /** Bumped when a refresh changes the set of saved audio. */
+    public static volatile int changes;
     public synchronized void refresh(){
-        completed.clear();paths.clear();AudioFileIndex index=new AudioFileIndex(context);
+        java.util.Set<String> before=new java.util.HashSet<String>(completed);completed.clear();paths.clear();AudioFileIndex index=new AudioFileIndex(context);
         try{for(AudioFileIndex.Entry e:index.entries(account)){File f=new File(e.path);try{MusicPaths.resolve(root,relative(f));if(e.matches(f)){completed.add(e.token);paths.put(e.token,f);}}catch(IOException outside){}}}
         finally{index.close();}
         File[] old=legacy.listFiles();if(old!=null)for(File file:old)if(file.isFile() && file.getName().matches("[0-9a-f]{64}\\.audio") && file.length()>=16 && !paths.containsKey(file.getName())){completed.add(file.getName());paths.put(file.getName(),file);}
-        refreshedAt=android.os.SystemClock.uptimeMillis();
+        if(!before.equals(completed))changes++;refreshedAt=android.os.SystemClock.uptimeMillis();
     }
     public synchronized void refreshIfStale(){if(android.os.SystemClock.uptimeMillis()-refreshedAt>=2500)refresh();}
     private String relative(File file)throws IOException {String base=root.getCanonicalPath()+File.separator,path=file.getCanonicalPath();if(!path.startsWith(base))throw new IOException("File outside Music");return path.substring(base.length());}

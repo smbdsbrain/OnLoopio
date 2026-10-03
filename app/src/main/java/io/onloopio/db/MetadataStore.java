@@ -20,6 +20,9 @@ import java.util.Set;
 
 /** Playlist metadata and its deduplicated library. Audio files live separately on SD. */
 public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEngine.Repository {
+    /** Bumped after every committed write so app-scoped caches (LibraryModel) know when to rebuild; never before the data lands. */
+    public static volatile int changes;
+    private static void changed(){changes++;}
     public MetadataStore(Context context) { super(context, "onloopio.db", null, 9); }
     public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE server (id INTEGER PRIMARY KEY CHECK(id=1), account_key TEXT NOT NULL, last_successful_sync INTEGER NOT NULL DEFAULT 0, catalog_synced INTEGER NOT NULL DEFAULT 0, playlist_checked_at INTEGER NOT NULL DEFAULT 0, playlist_audited_at INTEGER NOT NULL DEFAULT 0)");
@@ -74,7 +77,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
             ContentValues values = new ContentValues(); values.put("id", 1); values.put("account_key", key);
             db.insertOrThrow("server", null, values); db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
-    }
+    changed();}
     public synchronized List<Playlist> playlists() {
         List<Playlist> playlists = new ArrayList<Playlist>();
         Cursor c = getReadableDatabase().rawQuery("SELECT id,name,changed,song_count,duration FROM playlist ORDER BY name COLLATE NOCASE,id", null);
@@ -93,8 +96,8 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
     public synchronized boolean followsPlaylist(String id){Cursor c=getReadableDatabase().rawQuery("SELECT offline_sync FROM playlist WHERE id=?",new String[]{id});try{return c.moveToFirst() && c.getInt(0)!=0;}finally{c.close();}}
     public synchronized boolean hasPlaylistDetail(String id){Cursor c=getReadableDatabase().rawQuery("SELECT detail_cached FROM playlist WHERE id=?",new String[]{id});try{return c.moveToFirst() && c.getInt(0)!=0;}finally{c.close();}}
     public synchronized boolean hasCatalogSong(String id){Cursor c=getReadableDatabase().rawQuery("SELECT 1 FROM song WHERE id=? AND in_catalog=1",new String[]{id});try{return c.moveToFirst();}finally{c.close();}}
-    public synchronized void followPlaylist(String id,boolean follow){ContentValues v=new ContentValues();v.put("offline_sync",follow?1:0);getWritableDatabase().update("playlist",v,"id=?",new String[]{id});}
-    public synchronized void stopFollowingPlaylists(){getWritableDatabase().execSQL("UPDATE playlist SET offline_sync=0");}
+    public synchronized void followPlaylist(String id,boolean follow){ContentValues v=new ContentValues();v.put("offline_sync",follow?1:0);getWritableDatabase().update("playlist",v,"id=?",new String[]{id});changed();}
+    public synchronized void stopFollowingPlaylists(){getWritableDatabase().execSQL("UPDATE playlist SET offline_sync=0");changed();}
     public synchronized boolean protectedFromCleanup(String id){Cursor c=getReadableDatabase().rawQuery("SELECT 1 FROM audio_state WHERE song_id=? AND pinned=1 UNION ALL SELECT 1 FROM playlist_song ps JOIN playlist p ON p.id=ps.playlist_id WHERE ps.song_id=? AND p.offline_sync=1 LIMIT 1",new String[]{id,id});try{return c.moveToFirst();}finally{c.close();}}
     /** Headers, ordered details, catalog (if fetched), queue additions and success stamp commit together. */
     public synchronized int applyPlaylistSync(String account,List<Playlist> headers,List<PlaylistDetail> details,Library catalog,List<String> completedNames,long now,boolean audit){
@@ -142,7 +145,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
         SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{Cursor c=db.rawQuery("SELECT id FROM song WHERE audio_name=''",null);List<String> ids=new ArrayList<String>();try{while(c.moveToNext())ids.add(c.getString(0));}finally{c.close();}
             for(String id:ids){ContentValues v=new ContentValues();v.put("audio_name",CacheKey.audioName(id));db.update("song",v,"id=?",new String[]{id});}db.setTransactionSuccessful();
         }finally{db.endTransaction();}
-    }
+    changed();}
     /** Indexed lookup of actual files, avoiding 9,000 SD stats or hashes on the UI thread. */
     public synchronized List<Song> offlineSongs(List<String> names){
         List<Song> songs=new ArrayList<Song>();for(int offset=0;offset<names.size();offset+=400){int end=Math.min(names.size(),offset+400);StringBuilder sql=new StringBuilder("SELECT id,title,artist,album,suffix,duration,album_id,track,artist_id,genre,disc,cover_art FROM song WHERE audio_name IN (");String[] args=new String[end-offset];for(int n=offset;n<end;n++){if(n>offset)sql.append(',');sql.append('?');args[n-offset]=names.get(n);}sql.append(')');Cursor c=getReadableDatabase().rawQuery(sql.toString(),args);try{while(c.moveToNext())songs.add(readSong(c));}finally{c.close();}}
@@ -164,7 +167,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
     public synchronized List<Song> localSongs(){List<Song> result=new ArrayList<Song>();for(LocalEntry e:localEntries())result.add(e.song);return result;}
     public synchronized int localCount(){Cursor c=getReadableDatabase().rawQuery("SELECT COUNT(*) FROM local_song",null);try{c.moveToFirst();return c.getInt(0);}finally{c.close();}}
     /** An unavailable/partial scan never calls this; committed snapshots include removals. */
-    public synchronized void replaceLocalSongs(List<LocalEntry> entries){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{db.delete("local_song",null,null);for(LocalEntry e:entries){if(!e.song.local() || !e.song.id.startsWith("local:"))throw new IllegalArgumentException("Invalid local entry");ContentValues v=songValues(e.song);v.remove("audio_name");v.put("path",e.song.localPath);v.put("bytes",e.bytes);v.put("modified",e.modified);db.insertOrThrow("local_song",null,v);}db.setTransactionSuccessful();}finally{db.endTransaction();}}
+    public synchronized void replaceLocalSongs(List<LocalEntry> entries){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{db.delete("local_song",null,null);for(LocalEntry e:entries){if(!e.song.local() || !e.song.id.startsWith("local:"))throw new IllegalArgumentException("Invalid local entry");ContentValues v=songValues(e.song);v.remove("audio_name");v.put("path",e.song.localPath);v.put("bytes",e.bytes);v.put("modified",e.modified);db.insertOrThrow("local_song",null,v);}db.setTransactionSuccessful();}finally{db.endTransaction();}changed();}
     private static ContentValues songValues(Song s) {
         ContentValues v=new ContentValues();v.put("id",s.id);v.put("title",s.title);v.put("artist",s.artist);v.put("album",s.album);v.put("suffix",s.suffix);v.put("duration",s.duration);v.put("album_id",s.albumId);v.put("track",s.track);v.put("artist_id",s.artistId);v.put("genre",s.genre);v.put("disc",s.disc);v.put("cover_art",s.coverArt);v.put("audio_name",CacheKey.audioName(s.id));return v;
     }
@@ -179,7 +182,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
             ContentValues stamp=new ContentValues(); stamp.put("last_successful_sync",System.currentTimeMillis());stamp.put("catalog_synced",1);db.update("server",stamp,"id=1",null);
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
-    }
+    changed();}
     public synchronized List<Library.Entity> artists() {
         List<Library.Entity> result=new ArrayList<Library.Entity>(); Cursor c=getReadableDatabase().rawQuery("SELECT id,name FROM artist ORDER BY name COLLATE NOCASE",null);
         try { while(c.moveToNext()) result.add(new Library.Entity(c.getString(0),c.getString(1),"","")); } finally { c.close(); } return result;
@@ -195,17 +198,17 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
             for(String id:ids) { if(id.startsWith("local:"))continue;ContentValues v=new ContentValues(); v.put("song_id",id); v.put("position",next++); if(db.insertWithOnConflict("download_queue",null,v,SQLiteDatabase.CONFLICT_IGNORE)==-1){v.put("state",0);v.put("received",0);v.put("total",-1);v.put("error","");db.update("download_queue",v,"song_id=? AND state=2",new String[]{id});} }
             db.setTransactionSuccessful();
         } finally {db.endTransaction();}
-    }
+    changed();}
     public synchronized String nextDownload() {
         Cursor c=getReadableDatabase().rawQuery("SELECT song_id FROM download_queue WHERE state=0 ORDER BY position LIMIT 1",null); try {return c.moveToFirst()?c.getString(0):null;} finally {c.close();}
     }
-    public synchronized void completedDownload(String id) {ContentValues v=new ContentValues();v.put("state",2);v.put("updated",System.currentTimeMillis());v.put("error","");getWritableDatabase().update("download_queue",v,"song_id=?",new String[]{id});getWritableDatabase().execSQL("DELETE FROM download_queue WHERE state=2 AND song_id NOT IN (SELECT song_id FROM download_queue WHERE state=2 ORDER BY updated DESC LIMIT 100)");}
-    public synchronized void failedDownload(String id) {failedDownload(id,"Download failed");}
+    public synchronized void completedDownload(String id) {ContentValues v=new ContentValues();v.put("state",2);v.put("updated",System.currentTimeMillis());v.put("error","");getWritableDatabase().update("download_queue",v,"song_id=?",new String[]{id});getWritableDatabase().execSQL("DELETE FROM download_queue WHERE state=2 AND song_id NOT IN (SELECT song_id FROM download_queue WHERE state=2 ORDER BY updated DESC LIMIT 100)");changed();}
+    public synchronized void failedDownload(String id) {failedDownload(id,"Download failed");changed();}
     public synchronized void failedDownload(String id,String error) { ContentValues v=new ContentValues(); v.put("state",1);v.put("error",error);v.put("updated",System.currentTimeMillis()); getWritableDatabase().update("download_queue",v,"song_id=?",new String[]{id}); }
-    public synchronized void retryDownloads() { ContentValues v=new ContentValues(); v.put("state",0); getWritableDatabase().update("download_queue",v,"state=1",null); }
+    public synchronized void retryDownloads() { ContentValues v=new ContentValues(); v.put("state",0); getWritableDatabase().update("download_queue",v,"state=1",null); changed();}
     public synchronized int pendingDownloads() { Cursor c=getReadableDatabase().rawQuery("SELECT COUNT(*) FROM download_queue WHERE state<>2",null); try {c.moveToFirst();return c.getInt(0);} finally {c.close();} }
-    public synchronized void removeDownload(String id) { getWritableDatabase().delete("download_queue","song_id=?",new String[]{id}); }
-    public synchronized void clearDownloads() {getWritableDatabase().delete("download_queue",null,null);}
+    public synchronized void removeDownload(String id) { getWritableDatabase().delete("download_queue","song_id=?",new String[]{id}); changed();}
+    public synchronized void clearDownloads() {getWritableDatabase().delete("download_queue",null,null);changed();}
     public static final class Download {
         public final Song song;public final int state;public final long received,total;public final String error;
         Download(Song song,int state,long received,long total,String error){this.song=song;this.state=state;this.received=received;this.total=total;this.error=error;}
@@ -217,12 +220,12 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
         try{while(c.moveToNext())result.add(new Download(readSong(c),c.getInt(12),c.getLong(13),c.getLong(14),c.getString(15)));}finally{c.close();}return result;
     }
     public synchronized void downloadProgress(String id,long received,long total){ContentValues v=new ContentValues();v.put("received",received);v.put("total",total);getWritableDatabase().update("download_queue",v,"song_id=?",new String[]{id});}
-    public synchronized void retryDownload(String id){ContentValues v=new ContentValues();v.put("state",0);v.put("error","");getWritableDatabase().update("download_queue",v,"song_id=?",new String[]{id});}
+    public synchronized void retryDownload(String id){ContentValues v=new ContentValues();v.put("state",0);v.put("error","");getWritableDatabase().update("download_queue",v,"song_id=?",new String[]{id});changed();}
     public static final class AudioState {public final long downloaded,lastPlayed;public final int plays;public final boolean pinned;AudioState(long d,long l,int p,boolean pin){downloaded=d;lastPlayed=l;plays=p;pinned=pin;}}
     public synchronized int pinnedCount(){Cursor c=getReadableDatabase().rawQuery("SELECT COUNT(*) FROM (SELECT song_id FROM audio_state WHERE pinned=1 UNION SELECT ps.song_id FROM playlist_song ps JOIN playlist p ON p.id=ps.playlist_id WHERE p.offline_sync=1)",null);try{c.moveToFirst();return c.getInt(0);}finally{c.close();}}
     private void ensureAudioState(String id){ContentValues v=new ContentValues();v.put("song_id",id);getWritableDatabase().insertWithOnConflict("audio_state",null,v,SQLiteDatabase.CONFLICT_IGNORE);}
     public synchronized AudioState audioState(String id){Cursor c=getReadableDatabase().rawQuery("SELECT downloaded_at,last_played,play_count,pinned FROM audio_state WHERE song_id=?",new String[]{id});try{return c.moveToFirst()?new AudioState(c.getLong(0),c.getLong(1),c.getInt(2),c.getInt(3)!=0):new AudioState(0,0,0,false);}finally{c.close();}}
-    public synchronized void downloaded(String id,long when){ensureAudioState(id);ContentValues v=new ContentValues();v.put("downloaded_at",when);getWritableDatabase().update("audio_state",v,"song_id=?",new String[]{id});}
+    public synchronized void downloaded(String id,long when){ensureAudioState(id);ContentValues v=new ContentValues();v.put("downloaded_at",when);getWritableDatabase().update("audio_state",v,"song_id=?",new String[]{id});changed();}
     public synchronized void listened(String id,long when){ensureAudioState(id);getWritableDatabase().execSQL("UPDATE audio_state SET last_played=?,play_count=play_count+1 WHERE song_id=?",new Object[]{when,id});}
     /** Count and enqueue together. Local files never enter the server outbox. */
     public synchronized void recordListening(ListenEvent event,long qualifiedAt){
@@ -294,8 +297,8 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
             }
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
-    }
-    public synchronized void pin(List<String> ids,boolean pinned){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{for(String id:ids){ensureAudioState(id);ContentValues v=new ContentValues();v.put("pinned",pinned?1:0);db.update("audio_state",v,"song_id=?",new String[]{id});}db.setTransactionSuccessful();}finally{db.endTransaction();}}
+    changed();}
+    public synchronized void pin(List<String> ids,boolean pinned){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{for(String id:ids){ensureAudioState(id);ContentValues v=new ContentValues();v.put("pinned",pinned?1:0);db.update("audio_state",v,"song_id=?",new String[]{id});}db.setTransactionSuccessful();}finally{db.endTransaction();}changed();}
     public synchronized Set<String> queuedIds(){Set<String> ids=new HashSet<String>();Cursor c=getReadableDatabase().rawQuery("SELECT song_id FROM download_queue WHERE state<>2",null);try{while(c.moveToNext())ids.add(c.getString(0));}finally{c.close();}return ids;}
     private static ContentValues values(Playlist p) {
         ContentValues v = new ContentValues(); v.put("id", p.id); v.put("name", p.name); v.put("changed", p.changed);
@@ -316,7 +319,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
             for (String id : removed) { db.delete("playlist_song", "playlist_id=?", new String[]{id}); db.delete("playlist", "id=?", new String[]{id}); }
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
-    }
+    changed();}
     public synchronized void saveDetail(PlaylistDetail detail) {
         SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
         try {
@@ -331,7 +334,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
             }
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
-    }
+    changed();}
     public synchronized PlaylistDetail detail(String id) {
         SQLiteDatabase db = getReadableDatabase(); Playlist playlist;
         Cursor c = db.rawQuery("SELECT id,name,changed,song_count,duration,detail_cached FROM playlist WHERE id=?", new String[]{id});

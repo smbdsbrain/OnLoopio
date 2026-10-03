@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added a spectrum display over the cover on Now Playing, driven by the platform Visualizer effect, with a settings toggle.
+- Debug builds expose adb hooks (`io.onloopio.debug.*`) for emulator-driven testing; release builds do not include them.
+- Instrumentation tests compile again on Android Gradle Plugin 8 (legacy `android.test` libraries, test namespace).
+- Library screens read from an app-scoped `LibraryModel` built off the main thread; opening Tracks with 7000 local songs no longer rebuilds the whole library per screen, and lifecycle renders are coalesced.
+
 ## 0.10.0
 
 - Added Like / Remove like actions, hearts in track lists and a Favorite tracks library section. Double pressing the lower Play button toggles a like while keeping playback unchanged.

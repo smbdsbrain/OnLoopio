@@ -46,7 +46,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /** Sole HOME: music menu, synchronized library and controls for completed local audio. */
-public final class PlaylistActivity extends Activity {
+public final class PlaylistActivity extends Activity implements io.onloopio.library.LibraryModel.Listener {
     public static volatile PlaylistActivity foreground;
     private static final int HOME=0, PLAYLISTS=1, DETAIL=2, ARTISTS=3, ALBUMS=4, TRACKS=5, PLAYER=6, CONTEXT=7, GENRES=8, PLAYER_MENU=9, POWER_CONFIRM=10,FAVORITES=11;
     private final Handler main=new Handler(); private final ExecutorService worker=Executors.newSingleThreadExecutor();
@@ -67,8 +67,10 @@ public final class PlaylistActivity extends Activity {
     private final java.util.Map<String,String> artistNames=new java.util.HashMap<String,String>();
     private String accountKey,artist,artistKey,album,genre; private Future<?> pending; private boolean firstResume=true; private AudioCache audioCache; private long lastRefreshAttempt;
     private final java.util.Map<String,String> albumKeyByName=new java.util.HashMap<String,String>();
+    private io.onloopio.library.LibraryModel libraryModel;private boolean renderQueued,renderPreserve=true,renderedOffline;
+    private final Comparator<String> names=new Comparator<String>(){public int compare(String a,String b){return compareNames(a,b);}};
     private final java.util.Map<String,String> artistNameByKey=new java.util.HashMap<String,String>(),artistKeyByName=new java.util.HashMap<String,String>();
-    private final BroadcastReceiver localUpdated=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(screen!=CONTEXT)render(true);}};
+    private final BroadcastReceiver localUpdated=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(screen!=CONTEXT)requestRender(true);}};
     private List<Song> contextTracks=new ArrayList<Song>();private String contextTitle,contextPlaylistId;private int previousScreen;
     private String contextSongId,contextAccount,menuSongId,menuAccount;private int contextLikeIndex=-1,playerLikeIndex=-1;private java.util.Set<String> likedIds=Collections.emptySet();
     private final BroadcastReceiver feedbackUpdated=new BroadcastReceiver(){public void onReceive(Context c,Intent i){render(true);}};
@@ -130,8 +132,8 @@ public final class PlaylistActivity extends Activity {
             io.onloopio.library.MusicLibraryService.request(this,true);
         }
         try {if(config==null)audioCache=null;else if(audioCache==null || changed)audioCache=new AudioCache(this,config);else audioCache.refreshIfStale();}catch(Exception unavailable){audioCache=null;}
-        if(store.needsAudioIndex())worker.submit(new Runnable(){public void run(){try{store.backfillAudioIndex();main.post(new Runnable(){public void run(){if(!isFinishing())render(true);}});}catch(RuntimeException failure){android.util.Log.w("OnLoopio","Audio index rebuild failed");}}});
-        render(true);
+        if(store.needsAudioIndex())worker.submit(new Runnable(){public void run(){try{store.backfillAudioIndex();main.post(new Runnable(){public void run(){if(!isFinishing())requestRender(true);}});}catch(RuntimeException failure){android.util.Log.w("OnLoopio","Audio index rebuild failed");}}});
+        requestRender(true);
         if((firstResume || changed || imported || reload) && config!=null && online.homeWifi() && !settings.flag("force_offline",false)) {
             if(imported || reload || !store.catalogSynced())refresh(false);
             else {checkMode();PlaylistSyncService.request(this,"startup",accountSwitched,null);}
@@ -139,16 +141,19 @@ public final class PlaylistActivity extends Activity {
         firstResume=false;
     }
     protected void onPause() {rememberSelection();unregisterReceiver(synchronizedPlaylists);unregisterReceiver(feedbackUpdated);unregisterReceiver(localUpdated);if(foreground==this)foreground=null;invalidate();main.removeCallbacks(tick);cancelTap();center.cancel();wheelGuard.reset();super.onPause();}
-    protected void onDestroy() { invalidate(); worker.shutdownNow();coversWorker.shutdownNow();artworkRequest++; store.close(); super.onDestroy(); }
+    protected void onDestroy() { invalidate(); if(libraryModel!=null)libraryModel.forget(this); worker.shutdownNow();coversWorker.shutdownNow();artworkRequest++; store.close(); super.onDestroy(); }
     private void invalidate() { generation++; if(pending!=null) pending.cancel(true);pending=null; }
+    /** offline() asks WifiManager over binder, so the mode and the extension flag are resolved once per render, not once per row. */
+    private boolean labelOffline,labelExtensions;
     private String trackLabel(Song song) {
         String label=song.title;
-        if(settings.flag("file_extensions",false) && song.suffix.length()>0 && !label.endsWith("."+song.suffix)) label+="."+song.suffix;
-        return (likedIds.contains(song.id)?"♥ ":"")+(!offline() && (song.local() || audioCache!=null && audioCache.contains(song))?"✓ ":"")+label+(song.artist.length()==0?"":"\n"+song.artist);
+        if(labelExtensions && song.suffix.length()>0 && !label.endsWith("."+song.suffix)) label+="."+song.suffix;
+        return (likedIds.contains(song.id)?"♥ ":"")+(!labelOffline && (song.local() || audioCache!=null && audioCache.contains(song))?"✓ ":"")+label+(song.artist.length()==0?"":"\n"+song.artist);
     }
     private boolean offline() { return !online.online(); }
     private boolean availableOnly(){return offline();}
     private List<Song> library() {
+        io.onloopio.library.LibraryModel.Snapshot m=model();if(m!=null)return new ArrayList<Song>(m.library);
         List<Song> all=availableOnly()?(audioCache==null?new ArrayList<Song>():store.offlineSongs(audioCache.completedNames())):store.catalogSongs();List<Song> result=new ArrayList<Song>();
         for(Song s:all)if(!availableOnly() || audioCache!=null && audioCache.contains(s))result.add(s);result.addAll(store.localSongs());return result;
     }
@@ -156,8 +161,17 @@ public final class PlaylistActivity extends Activity {
     private List<Song> playable(List<Song> source) {
         if(!offline()) return source; List<Song> result=new ArrayList<Song>();for(Song s:source)if(s.local() && new java.io.File(s.localPath).isFile() || audioCache!=null && audioCache.contains(s))result.add(s);return result;
     }
-    private java.util.Set<String> artistAlbums(String key) {
-        java.util.Set<String> result=new java.util.HashSet<String>();if(key!=null)for(Library.Entity entity:store.albums())if(key.equals("id:"+entity.artistId))result.add("id:"+entity.id);return result;
+    /** Latest library snapshot; null only before the first build, then the screens show a loading row and re-render on libraryModelReady. */
+    private io.onloopio.library.LibraryModel.Snapshot model(){
+        if(libraryModel==null)libraryModel=io.onloopio.library.LibraryModel.get(this);
+        return libraryModel.request(availableOnly(),audioCache,(settings.flag("natural_sort",true)?1:0)+(settings.flag("sort_descending",false)?2:0),names,this);
+    }
+    public void libraryModelReady(){if(!isFinishing() && screen!=PLAYER && screen!=CONTEXT)requestRender(true);}
+    /** Coalesces the lifecycle, broadcast and timer renders that used to repeat two to four times per screen. */
+    private void requestRender(boolean preserve){renderPreserve=renderPreserve && preserve;if(renderQueued)return;renderQueued=true;main.post(new Runnable(){public void run(){renderQueued=false;boolean keep=renderPreserve;renderPreserve=true;if(!isFinishing())render(keep);}});}
+    private java.util.Set<String> artistAlbums(String key) {return artistAlbums(key,model());}
+    private java.util.Set<String> artistAlbums(String key,io.onloopio.library.LibraryModel.Snapshot m) {
+        java.util.Set<String> result=new java.util.HashSet<String>();if(key!=null)for(Library.Entity entity:m==null?store.albums():m.albums)if(key.equals("id:"+entity.artistId))result.add("id:"+entity.id);return result;
     }
     private static String albumNameKey(String artist,String album){return artist.trim().toLowerCase(java.util.Locale.US)+"\u0000"+album.trim().toLowerCase(java.util.Locale.US);}
     private void registerAlbumName(String artist,String album,String key){
@@ -171,6 +185,7 @@ public final class PlaylistActivity extends Activity {
     private void render(boolean preserve) {
         // Capture against the rows that are actually displayed, before rebuilding their data.
         rememberSelection();
+        long started=android.os.SystemClock.uptimeMillis();
         if(screen==PLAYER){
             renderedList=null;
             if(playerView==null || getWindow().getDecorView().findViewWithTag("player")!=playerView){playerView=new NowPlayingView(this);playerView.setTag("player");setContentView(playerView);playerView.covers(currentCover,nextCover);playerView.requestFocus();}
@@ -178,10 +193,15 @@ public final class PlaylistActivity extends Activity {
         }
         wheelGuard.reset();
         if(playerView!=null && getWindow().getDecorView().findViewWithTag("player")==playerView)createPage();
-        if(audioCache!=null)audioCache.refreshIfStale();ListPosition saved=preserve?positions.get(listKey()):null;labels.clear();groups.clear();likedIds=store.likedIds();
+        if(audioCache!=null)audioCache.refreshIfStale();ListPosition saved=preserve?positions.get(listKey()):null;labels.clear();groups.clear();likedIds=store.likedIds();renderedOffline=offline();labelOffline=renderedOffline;labelExtensions=settings.flag("file_extensions",false);
+        io.onloopio.library.LibraryModel.Snapshot m=(screen==HOME || screen==ARTISTS || screen==ALBUMS || screen==GENRES || screen==TRACKS)?model():null;
+        if(m==null && (screen==ARTISTS || screen==ALBUMS || screen==GENRES || screen==TRACKS)){
+            title.setText(screen==ARTISTS?"Artists":screen==ALBUMS?"Albums":screen==GENRES?"Genres":"Tracks");labels.add("Loading library…");labels.add("Back to main menu");status.setText("Reading the music library");
+            list.setAdapter(adapter);list.requestFocus();list.setSelectionFromTop(0,0);return;
+        }
         if(screen==HOME) {
             title.setText("OnLoopio"); Collections.addAll(labels,"Playlists","Artists","Albums","Tracks","Genres","Now Playing","Settings","Favorite tracks");
-            status.setText(Ui.deviceInfo(this)+" · "+(offline()?"OFFLINE":"ONLINE")+" · "+(offline()?library().size():store.catalogCount()+store.localCount())+" tracks");
+            status.setText(Ui.deviceInfo(this)+" · "+(offline()?"OFFLINE":"ONLINE")+" · "+(m==null?"…":String.valueOf(m.trackCount))+" tracks");
         } else if(screen==PLAYLISTS) {
             title.setText("Playlists"); playlists=config==null?new ArrayList<Playlist>():store.playlists();
             if(offline()) { List<Playlist> available=new ArrayList<Playlist>(); for(Playlist p:playlists) {PlaylistDetail d=store.detail(p.id); if(d!=null && !playable(d.songs).isEmpty()) available.add(p);} playlists=available; }
@@ -194,15 +214,12 @@ public final class PlaylistActivity extends Activity {
             labels.add("Keep playlist offline"); labels.add("Refresh this playlist"); labels.add("Back to playlists");
             status.setText(tracks.size()+" tracks · ✓ saved audio");
         } else if(screen==ARTISTS || screen==ALBUMS) {
-            List<Song> songs=(!availableOnly() && store.catalogSynced())?store.localSongs():library();TreeSet<String> unique=new TreeSet<String>();albumNames.clear();artistNames.clear();artistNameByKey.clear();artistKeyByName.clear();albumKeyByName.clear();java.util.Set<String> owned=artistAlbums(artistKey);
-            if(!availableOnly())for(Library.Entity entity:store.albums())registerAlbumName(entity.artist,entity.name,"id:"+entity.id);
-            for(Song song:songs)if(!song.local())registerAlbumName(song.artist,song.album,song.albumKey());
-            if(!availableOnly())for(Library.Entity entity:store.artists()){artistNameByKey.put("id:"+entity.id,entity.name);artistKeyByName.put(entity.name.toLowerCase(java.util.Locale.US),"id:"+entity.id);}
-            for(Song song:songs)if(!song.local()){artistNameByKey.put(song.artistKey(),song.artist);artistKeyByName.put(song.artist.toLowerCase(java.util.Locale.US),song.artistKey());}
+            List<Song> songs=m.groupingSongs;TreeSet<String> unique=new TreeSet<String>();albumNames.clear();artistNames.clear();artistNameByKey.clear();artistKeyByName.clear();albumKeyByName.clear();
+            albumKeyByName.putAll(m.albumKeyByName);artistNameByKey.putAll(m.artistNameByKey);artistKeyByName.putAll(m.artistKeyByName);java.util.Set<String> owned=artistAlbums(artistKey,m);
             for(Song song:songs) if(byArtist(song,artistKey,owned)) {String key=song.local()?artistKeyByName.get(song.artist.toLowerCase(java.util.Locale.US)):song.artistKey();if(key==null)key=song.artistKey();String albumGroup=albumKey(song);unique.add(screen==ARTISTS?key:albumGroup);artistNames.put(key,song.artist);artistNameByKey.put(key,song.artist);albumNames.put(albumGroup,song.album.length()==0?"Singles / unknown album":song.album);}
             if(!availableOnly()) {
-                if(screen==ARTISTS) {for(Library.Entity entity:store.artists()){String key="id:"+entity.id;unique.add(key);artistNames.put(key,entity.name);}}
-                else for(Library.Entity entity:store.albums()) if(artistKey==null || artistKey.equals("id:"+entity.artistId)) {String key="id:"+entity.id;unique.add(key);albumNames.put(key,entity.name);}
+                if(screen==ARTISTS) {for(Library.Entity entity:m.artists){String key="id:"+entity.id;unique.add(key);artistNames.put(key,entity.name);}}
+                else for(Library.Entity entity:m.albums) if(artistKey==null || artistKey.equals("id:"+entity.artistId)) {String key="id:"+entity.id;unique.add(key);albumNames.put(key,entity.name);}
             }
             groups.addAll(unique);
             Collections.sort(groups,new Comparator<String>(){public int compare(String a,String b){int result=compareNames(screen==ARTISTS?artistNames.get(a):albumNames.get(a),screen==ARTISTS?artistNames.get(b):albumNames.get(b));return result==0?a.compareTo(b):result;}});
@@ -212,13 +229,14 @@ public final class PlaylistActivity extends Activity {
             if(screen==ALBUMS && artist!=null) labels.add("Back to artists");
             status.setText(groups.size()+" "+(screen==ARTISTS?"artists":"albums")+" · "+(offline()?"offline":"online"));
         } else if(screen==GENRES) {
-            title.setText("Genres");TreeSet<String> unique=new TreeSet<String>();if(!availableOnly() && store.catalogSynced())unique.addAll(store.catalogGenres());for(Song song:availableOnly()?library():store.localSongs())if(song.genre.length()>0)unique.add(song.genre);groups.addAll(unique);sort(groups);labels.addAll(groups);labels.add("Back to main menu");status.setText(groups.size()+" genres · "+(availableOnly()?"on device":"online"));
+            title.setText("Genres");groups.addAll(m.genres);labels.addAll(groups);labels.add("Back to main menu");status.setText(groups.size()+" genres · "+(availableOnly()?"on device":"online"));
         } else if(screen==TRACKS || screen==FAVORITES) {
             tracks=new ArrayList<Song>();
-            java.util.Set<String> owned=artistAlbums(artistKey);
-            List<Song> source=screen==FAVORITES?playable(store.favoriteSongs()):selectionSource(artistKey,album,genre);
-            for(Song song:source)if(screen==FAVORITES || (album!=null || byArtist(song,artistKey,owned)) && byAlbum(song,album) && (genre==null || genre.equals(song.genre)))tracks.add(song);
-            if(album!=null) albumOrder(tracks);else Collections.sort(tracks,new Comparator<Song>(){public int compare(Song a,Song b){return compareNames(a.title,b.title);}});
+            if(screen==FAVORITES){tracks.addAll(playable(store.favoriteSongs()));Collections.sort(tracks,new Comparator<Song>(){public int compare(Song a,Song b){return compareNames(a.title,b.title);}});}
+            else if(artistKey==null && album==null && genre==null)tracks.addAll(m.byTitle);
+            else{java.util.Set<String> owned=artistAlbums(artistKey,m);List<Song> source=selectionSource(artistKey,album,genre);
+                for(Song song:source)if((album!=null || byArtist(song,artistKey,owned)) && byAlbum(song,album) && (genre==null || genre.equals(song.genre)))tracks.add(song);
+                if(album!=null) albumOrder(tracks);else Collections.sort(tracks,new Comparator<Song>(){public int compare(Song a,Song b){return compareNames(a.title,b.title);}});}
             title.setText(screen==FAVORITES?"Favorite tracks":album!=null?(tracks.isEmpty()?"Album":tracks.get(0).album):artist!=null?artist:genre!=null?genre:"Tracks");
             for(Song song:tracks) labels.add(trackLabel(song)); labels.add("Back"); status.setText(tracks.size()+" tracks · ✓ saved audio");
         } else if(screen==PLAYER_MENU) {
@@ -232,6 +250,7 @@ public final class PlaylistActivity extends Activity {
             contextLikeIndex=-1;if(contextSongId!=null){contextLikeIndex=labels.size();labels.add(store.isLiked(contextSongId)?"Remove like":"Like");}labels.add("Back");
             status.setText(contextTracks.size()+" tracks · "+(offline()?"offline":"online"));
         }
+        long built=android.os.SystemClock.uptimeMillis();
         renderedList=listKey();renderedRows.clear();for(int n=0;n<labels.size();n++)renderedRows.add(selectionKey(n));
         int selected=0;
         if(saved!=null){
@@ -243,6 +262,7 @@ public final class PlaylistActivity extends Activity {
         selected=Math.max(0,Math.min(selected,labels.size()-1));
         // Reattaching discards adapter scroll state before restoring this list's own anchor.
         list.setAdapter(adapter);list.requestFocus();list.setSelectionFromTop(selected,saved==null?0:saved.top);
+        android.util.Log.d("OnLoopio","RENDER screen="+screen+" rows="+labels.size()+" build="+(built-started)+"ms list="+(android.os.SystemClock.uptimeMillis()-built)+"ms");
     }
     private String listKey(){
         if(screen==DETAIL)return screen+":"+(current==null?"":current.id);
@@ -439,7 +459,7 @@ public final class PlaylistActivity extends Activity {
             if(config!=null && !settings.flag("force_offline",false) && online.homeWifi() && (online.needsCheck() || !online.online()) && pending==null && now-lastRefreshAttempt>30000) {
                 checkMode();
             }
-            else if(!online.homeWifi() && screen!=PLAYER && screen!=CONTEXT) render(true);
+            else if(!online.homeWifi() && screen!=PLAYER && screen!=CONTEXT && (screen==HOME || offline()!=renderedOffline)) requestRender(true);
         } main.postDelayed(this,500); } };
     private int compareNames(String a,String b) {
         int result=settings.flag("natural_sort",true)?natural(a,b):a.compareToIgnoreCase(b);

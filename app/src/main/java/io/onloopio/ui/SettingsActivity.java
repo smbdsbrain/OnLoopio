@@ -62,6 +62,7 @@ public final class SettingsActivity extends WheelActivity {
             r.add(row("Date / time",new Runnable(){ public void run(){ clockMenu(); }}));
             r.add(row("Theme",new Runnable(){ public void run(){ choose("Theme",new String[]{"Green","Light","Blue"},prefs.number("theme",0),new Choice(){ public void apply(int n){ prefs.setNumber("theme",n); }}); }}));
             r.add(new Item("Accent color: "+Ui.label(SettingsActivity.this,AccentPalette.NAMES[AccentPalette.selected(prefs)]),new Runnable(){ public void run(){ accentMenu(); }},AccentPalette.color(prefs.number("theme",0),AccentPalette.selected(prefs))));
+            r.add(toggle("Spectrum on cover","spectrum",true));
             r.add(row("Wallpaper",new Runnable(){ public void run(){ wallpaperMenu(Environment.getExternalStorageDirectory()); }}));
             r.add(row("Language",new Runnable(){ public void run(){ choose("Language",new String[]{"English","Русский"},prefs.number("language",0),new Choice(){ public void apply(int n){ prefs.setNumber("language",n); }}); }}));
             r.add(row("Track sorting",new Runnable(){ public void run(){ choose("Track sorting",new String[]{"Natural ascending","Natural descending","Alphabetical ascending","Alphabetical descending"},prefs.number("sort",0),new Choice(){ public void apply(int n){ prefs.setNumber("sort",n); prefs.setFlag("natural_sort",n<2); prefs.setFlag("sort_descending",n%2==1); }}); }}));
