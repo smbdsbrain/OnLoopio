@@ -23,6 +23,10 @@ import io.onloopio.db.MetadataStore;
 import io.onloopio.device.DeviceSettings;
 import io.onloopio.device.OnlineMode;
 import io.onloopio.model.Song;
+import io.onloopio.model.ListenEvent;
+import io.onloopio.sync.PlaylistSyncService;
+import io.onloopio.device.ControlLock;
+import android.view.KeyEvent;
 import io.onloopio.ui.PlaylistActivity;
 import java.io.File;
 import java.io.IOException;
@@ -39,6 +43,7 @@ import android.media.MediaPlayer;
 /** Plays completed offline audio or streams directly; download jobs are independent and persistent. */
 public final class PlaybackService extends Service implements AudioManager.OnAudioFocusChangeListener {
     public static final String CLEAN="io.onloopio.CLEAN_CACHE",REMOVE_DOWNLOAD="io.onloopio.REMOVE_DOWNLOAD_JOB",RESUME_PENDING="io.onloopio.RESUME_PENDING_DOWNLOADS";
+    public static final String MEDIA_KEY="io.onloopio.MEDIA_KEY",TOGGLE_LIKE="io.onloopio.TOGGLE_LIKE";
     public static final String PLAY="io.onloopio.PLAY", TOGGLE="io.onloopio.TOGGLE", NEXT="io.onloopio.NEXT",
         PREVIOUS="io.onloopio.PREVIOUS", SEEK="io.onloopio.SEEK", SYNC="io.onloopio.SYNC_AUDIO",
         STOP="io.onloopio.STOP", SETTINGS="io.onloopio.APPLY_DEVICE_SETTINGS", CANCEL="io.onloopio.CANCEL_DOWNLOAD",
@@ -46,13 +51,17 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
         ENQUEUE="io.onloopio.ENQUEUE_DOWNLOAD", REMOVE="io.onloopio.REMOVE_AUDIO",
         APPEND="io.onloopio.APPEND_QUEUE", PLAY_NEXT="io.onloopio.PLAY_NEXT", RETRY="io.onloopio.RETRY_DOWNLOAD",CLEAR_QUEUE="io.onloopio.CLEAR_DOWNLOAD_QUEUE",KICK="io.onloopio.RESUME_QUEUED_DOWNLOADS";
     public static final class State {
-        public final Song song; public final String message; public final boolean playing,busy;
+        public final Song song; public final String message; public final boolean playing,busy,liked;
         public final int position,duration,queuePosition,queueSize;public final Song next;
         State(Song song,String message,boolean playing,boolean busy,int position,int duration) {
             this(song,message,playing,busy,position,duration,null,0,0);
         }
         State(Song song,String message,boolean playing,boolean busy,int position,int duration,Song next,int qpos,int qsize) {
+            this(song,message,playing,busy,position,duration,next,qpos,qsize,false);
+        }
+        State(Song song,String message,boolean playing,boolean busy,int position,int duration,Song next,int qpos,int qsize,boolean liked) {
             this.song=song; this.message=message; this.playing=playing; this.busy=busy; this.position=position; this.duration=duration;this.next=next;queuePosition=qpos;queueSize=qsize;
+            this.liked=liked;
         }
     }
     public static volatile State state=new State(null,"Choose a track to play.",false,false,0,0);
@@ -62,7 +71,10 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
     }
     public static volatile DownloadState downloads=new DownloadState(null,0,-1,0,"Idle");
     public static volatile String cleanupMessage="";public static volatile Set<String> protectedTracks=Collections.emptySet();
-    private volatile Set<String> protectedPlayback=Collections.emptySet();private Song nextSong;private int nextIndex=-1;private boolean listeningRecorded,cleaning;private long lastCleanup;
+    private volatile Set<String> protectedPlayback=Collections.emptySet();private Song nextSong;private int nextIndex=-1;private boolean cleaning;private long lastCleanup;
+    private final ListeningSession listening=new ListeningSession();private final PlayGesture playGesture=new PlayGesture();
+    private String sessionId,playbackAccount;private long sessionStarted;private boolean seeking,buffering,playbackCompleted;
+    private PowerManager.WakeLock gestureWake;
     private final Handler main=new Handler();
     private final ExecutorService worker=Executors.newSingleThreadExecutor(),downloadWorker=Executors.newSingleThreadExecutor();
     private MediaPlayer player; private Equalizer equalizer; private RemoteControlClient remote;
@@ -71,6 +83,7 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
     private int generation;private volatile int downloadGeneration;private Song song;private String message="Choose a track to play.";
     private final List<String> queue=new ArrayList<String>(); private int index; private ComponentName buttons;
     private final BroadcastReceiver noisy=new BroadcastReceiver() { public void onReceive(Context c,Intent i) { pause(); } };
+    private final BroadcastReceiver feedbackUpdated=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(ControlLock.CHANGED.equals(i.getAction()))cancelPlayGesture();publish();}};
     public static void action(Context context,String action) { context.startService(new Intent(context,PlaybackService.class).setAction(action)); }
     public static void play(Context context,List<Song> tracks,int selected,boolean sync) {
         ArrayList<String> ids=new ArrayList<String>(); for(Song track:tracks) ids.add(track.id);
@@ -86,16 +99,23 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
         player.setWakeMode(this,PowerManager.PARTIAL_WAKE_LOCK); player.setAudioStreamType(AudioManager.STREAM_MUSIC);
         player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() { public void onPrepared(MediaPlayer media) { prepared=true; applyEffects(); startLocal(); } });
         player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() { public void onCompletion(MediaPlayer media) {
-            if(settings.number("repeat",0)==1) { player.seekTo(0); startLocal(); } else advance(1,false);
+            recordProgress(true);playbackCompleted=true;
+            if(settings.number("repeat",0)==1) {newSession();seekTo(0);startLocal();} else advance(1,false);
+        }});
+        player.setOnSeekCompleteListener(new MediaPlayer.OnSeekCompleteListener(){public void onSeekComplete(MediaPlayer media){seeking=false;listening.baseline(android.os.SystemClock.elapsedRealtime(),media.getCurrentPosition());}});
+        player.setOnInfoListener(new MediaPlayer.OnInfoListener(){public boolean onInfo(MediaPlayer media,int what,int extra){
+            if(what==MediaPlayer.MEDIA_INFO_BUFFERING_START){recordProgress(false);buffering=true;}
+            else if(what==MediaPlayer.MEDIA_INFO_BUFFERING_END){buffering=false;listening.baseline(android.os.SystemClock.elapsedRealtime(),media.getCurrentPosition());}return false;
         }});
         player.setOnErrorListener(new MediaPlayer.OnErrorListener() { public boolean onError(MediaPlayer media,int what,int extra) {
             Log.e("OnLoopio","DECODER_ERROR id="+(song==null?"":song.id)+" suffix="+(song==null?"":song.suffix)+" what="+what+" extra="+extra);
-            prepared=false;
+            recordProgress(false);prepared=false;
             if(!transcode && song!=null && !song.local() && online.homeWifi() && !settings.flag("force_offline",false)) {transcode=true;openStream(song.id,true);}
             else { message=song!=null && song.local()?"Cannot decode local "+song.suffix+". Convert to MP3 or FLAC.":"Cannot decode this track ("+what+"/"+extra+")."; publish(); }
             return true;
         }});
         registerReceiver(noisy,new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
+        IntentFilter feedbackFilter=new IntentFilter(PlaylistSyncService.FEEDBACK_UPDATED);feedbackFilter.addAction(ControlLock.CHANGED);registerReceiver(feedbackUpdated,feedbackFilter);
         buttons=new ComponentName(this,MediaButtons.class); audio.registerMediaButtonEventReceiver(buttons);
         PendingIntent receiver=PendingIntent.getBroadcast(this,0,new Intent(Intent.ACTION_MEDIA_BUTTON).setComponent(buttons),0);
         remote=new RemoteControlClient(receiver); audio.registerRemoteControlClient(remote);
@@ -107,6 +127,8 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
         if(intent==null) { resumeDownloads(); return START_NOT_STICKY; }
         String action=intent.getAction();
         Log.i("OnLoopio","SERVICE_ACTION "+action+" startId="+startId);
+        if(MEDIA_KEY.equals(action)){KeyEvent event=intent.getParcelableExtra("key");if(event!=null)mediaKey(event);return START_NOT_STICKY;}
+        if(TOGGLE_LIKE.equals(action)){toggleLike();return START_NOT_STICKY;}
         if(STOP.equals(action)) { stopSelf(startId); return START_NOT_STICKY; }
         if(CLEAN.equals(action)){cleanCache(true);return START_NOT_STICKY;}
         if(REMOVE_DOWNLOAD.equals(action)){String id=intent.getStringExtra("id");if(id!=null){store.removeDownload(id);if(downloads.song!=null && id.equals(downloads.song.id)){downloadGeneration++;busy=false;downloads=new DownloadState(null,0,-1,0,"Cancelled");resumeDownloads();}}return START_NOT_STICKY;}
@@ -130,17 +152,53 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
             else if(PLAY_NEXT.equals(action)) {nextIndex=-1; queue.addAll(Math.min(queue.size(),index+1),ids); message="Will play next."; }
             else { nextIndex=-1;queue.clear(); queue.addAll(ids); index=Math.max(0,Math.min(intent.getIntExtra("index",0),queue.size()-1)); open(index); }
         } else if(TOGGLE.equals(action)) {
-            resumeAfterFocus=false; if(prepared) { if(player.isPlaying()) pause(); else startLocal(); } else if(!queue.isEmpty()) open(index);
+            togglePlayback();
         } else if(NEXT.equals(action)) advance(1,true);
         else if(PAUSE.equals(action)) {resumeAfterFocus=false; pause();}
         else if(RESUME.equals(action)) {resumeAfterFocus=false; startLocal();}
-        else if(PREVIOUS.equals(action)) { if(prepared && player.getCurrentPosition()>3000) player.seekTo(0); else advance(-1,true); }
-        else if(SEEK.equals(action) && prepared) player.seekTo(Math.max(0,Math.min(player.getDuration(),player.getCurrentPosition()+intent.getIntExtra("seconds",0)*1000)));
+        else if(PREVIOUS.equals(action)) { if(prepared && player.getCurrentPosition()>3000) seekTo(0); else advance(-1,true); }
+        else if(SEEK.equals(action) && prepared) seekTo(Math.max(0,Math.min(player.getDuration(),player.getCurrentPosition()+intent.getIntExtra("seconds",0)*1000)));
         planNext();publish(); return START_NOT_STICKY;
     }
     private void closeStream() { if(proxy!=null) { proxy.close(); proxy=null; } }
+    private void newSession(){listening.reset();sessionId=java.util.UUID.randomUUID().toString();sessionStarted=0;seeking=false;buffering=false;playbackCompleted=false;cancelPlayGesture();}
+    private void recordProgress(boolean completing){
+        if(!prepared || song==null || sessionStarted==0)return;
+        int position,duration;boolean advancing;
+        try{position=player.getCurrentPosition();duration=player.getDuration();advancing=completing || player.isPlaying();}
+        catch(IllegalStateException decoderUnavailable){return;}
+        if(listening.sample(android.os.SystemClock.elapsedRealtime(),position,duration,advancing && !seeking && !buffering)){
+            store.recordListening(new ListenEvent(sessionId,playbackAccount,song.id,sessionStarted),System.currentTimeMillis());
+            if(!song.local())PlaylistSyncService.requestFeedback(this);
+        }
+    }
+    private void seekTo(int position){recordProgress(false);seeking=true;player.seekTo(position);}
+    private String playContext(){String active=store.accountKey();return (active==null?"":active)+":"+generation+":"+(song==null?"":song.id);}
+    private void releaseGestureWake(){if(gestureWake!=null && gestureWake.isHeld())gestureWake.release();}
+    private void cancelPlayGesture(){playGesture.cancel();main.removeCallbacks(finishPlayGesture);releaseGestureWake();}
+    private final Runnable finishPlayGesture=new Runnable(){public void run(){
+        applyPlayGesture(playGesture.finish(android.os.SystemClock.uptimeMillis(),playContext(),ControlLock.locked(PlaybackService.this)));
+        releaseGestureWake();
+    }};
+    private void mediaKey(KeyEvent event){
+        if(event.getKeyCode()!=KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || (event.getAction()!=KeyEvent.ACTION_DOWN && event.getAction()!=KeyEvent.ACTION_UP))return;
+        if(gestureWake==null){gestureWake=((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"OnLoopio:play-gesture");gestureWake.setReferenceCounted(false);}
+        gestureWake.acquire(PlayGesture.GAP_MS+1000);
+        int result=playGesture.key(event.getAction()==KeyEvent.ACTION_DOWN,event.isCanceled(),event.getRepeatCount(),event.getDownTime(),event.getEventTime(),playContext(),ControlLock.locked(this));
+        main.removeCallbacks(finishPlayGesture);applyPlayGesture(result);
+        long remaining=playGesture.remaining(android.os.SystemClock.uptimeMillis());if(remaining>=0)main.postDelayed(finishPlayGesture,remaining);else if(event.getAction()==KeyEvent.ACTION_UP)releaseGestureWake();
+    }
+    private void applyPlayGesture(int result){if(result==PlayGesture.SINGLE)togglePlayback();else if(result==PlayGesture.DOUBLE)toggleLike();}
+    private void togglePlayback(){resumeAfterFocus=false;if(prepared){if(player.isPlaying())pause();else startLocal();}else if(!queue.isEmpty())open(index);}
+    private void toggleLike(){
+        if(song==null || ControlLock.locked(this))return;
+        try{boolean liked=store.toggleLike(playbackAccount,song.id);new DeviceSettings(this).feedback();publish();
+            android.widget.Toast.makeText(this,liked?io.onloopio.ui.Ui.label(this,"Liked"):io.onloopio.ui.Ui.label(this,"Like removed"),android.widget.Toast.LENGTH_SHORT).show();
+            PlaylistSyncService.feedbackChanged(this);
+        }catch(IllegalStateException changed){cancelPlayGesture();}
+    }
     private void open(int position) {
-        generation++;listeningRecorded=false; index=position; song=store.song(queue.get(index)); prepared=false; transcode=false; player.reset(); closeStream();
+        recordProgress(false);generation++;newSession();index=position;song=store.song(queue.get(index));playbackAccount=store.accountKey();prepared=false;transcode=false;player.reset();closeStream();
         if(song==null) { message="Track metadata is not available."; publish(); return; }
         planNext();if(song.local()){File file=new File(song.localPath);try{String base=io.onloopio.library.MusicPaths.root().getCanonicalPath()+File.separator;if(!file.getCanonicalPath().startsWith(base) || !file.isFile())throw new IOException("Missing local file");prepare(file.getPath(),true);}catch(Exception missing){message="Local file unavailable. Scan Music after USB storage returns.";publish();}return;}
         ServerConfig config=new ConfigStore(this).load(); if(config==null) { message="Configure Navidrome from your computer."; publish(); return; }
@@ -174,10 +232,10 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
     private void startLocal() {
         if(!prepared) return;
         if(audio.requestAudioFocus(this,AudioManager.STREAM_MUSIC,AudioManager.AUDIOFOCUS_GAIN)!=AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {message="Audio output is in use.";publish();return;}
-        try {player.start(); message=proxy==null?"Playing offline":"Streaming from Navidrome"; remote.setPlaybackState(RemoteControlClient.PLAYSTATE_PLAYING); publish();}
+        try {if(playbackCompleted){newSession();seekTo(0);}recordProgress(false);player.start();if(sessionStarted==0)sessionStarted=System.currentTimeMillis();listening.baseline(android.os.SystemClock.elapsedRealtime(),player.getCurrentPosition());message=proxy==null?"Playing offline":"Streaming from Navidrome"; remote.setPlaybackState(RemoteControlClient.PLAYSTATE_PLAYING); publish();}
         catch(RuntimeException failure) {message="Audio output failed.";publish();}
     }
-    private void pause() { if(prepared && player.isPlaying()) player.pause(); message="Paused"; remote.setPlaybackState(RemoteControlClient.PLAYSTATE_PAUSED);publish(); }
+    private void pause() {recordProgress(false);if(prepared && player.isPlaying()) player.pause();message="Paused";remote.setPlaybackState(RemoteControlClient.PLAYSTATE_PAUSED);publish();}
     private void advance(int direction,boolean user) {
         if(queue.isEmpty()) return; int next=index+direction;
         if(direction>0 && nextIndex>=0 && !(user && settings.number("repeat",0)==1)) next=nextIndex;
@@ -250,7 +308,7 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
         }});
     }
     private void clearAudio() {
-        downloadGeneration++; busy=false; store.stopFollowingPlaylists();store.clearDownloads(); player.reset(); prepared=false; closeStream(); song=null; queue.clear();
+        recordProgress(false);cancelPlayGesture();downloadGeneration++; busy=false; store.stopFollowingPlaylists();store.clearDownloads(); player.reset(); prepared=false; closeStream(); song=null; queue.clear();
         final ServerConfig config=new ConfigStore(this).load(); if(config==null)return;
         downloadWorker.submit(new Runnable(){public void run(){try {new AudioCache(PlaybackService.this,config).clear(); main.post(new Runnable(){public void run(){message="Downloaded audio cleared.";publish();}});}catch(Exception failure){main.post(new Runnable(){public void run(){message="Cannot clear SD audio.";publish();}});}}});
     }
@@ -264,15 +322,16 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
     private void publish() {
         if(destroyed)return;
         boolean playing=prepared && player.isPlaying(); int position=prepared?player.getCurrentPosition():0, duration=prepared?player.getDuration():0;
-        state=new State(song,message,playing,busy,position,duration,nextSong,queue.isEmpty()?0:index+1,queue.size());
+        state=new State(song,message,playing,busy,position,duration,nextSong,queue.isEmpty()?0:index+1,queue.size(),song!=null && store.isLiked(song.id));
         PendingIntent home=PendingIntent.getActivity(this,0,new Intent(this,PlaylistActivity.class).setAction("io.onloopio.OPEN_PLAYER"),PendingIntent.FLAG_UPDATE_CURRENT);
         Notification notification=new Notification.Builder(this).setSmallIcon(R.drawable.icon).setContentTitle(song==null?"OnLoopio":song.title).setContentText(message).setContentIntent(home).setOngoing(playing||busy).build();
         if(song!=null || busy) startForeground(7,notification); else stopForeground(true);
     }
     private final Runnable tick=new Runnable(){public void run(){
         if(settings.flag("cache_auto_clean",false) && android.os.SystemClock.elapsedRealtime()-lastCleanup>21600000)cleanCache(false);
-        if(proxy!=null && (settings.flag("force_offline",false) || !online.homeWifi())) {player.reset();prepared=false;closeStream();message="Offline: stream stopped.";publish();}
-        if(prepared){int position=player.getCurrentPosition(),duration=player.getDuration();if(player.isPlaying() && !listeningRecorded && position>=Math.min(30000,Math.max(1000,duration/2))){listeningRecorded=true;if(song!=null)store.listened(song.id,System.currentTimeMillis());}state=new State(song,message,player.isPlaying(),busy,position,duration,nextSong,queue.isEmpty()?0:index+1,queue.size());}main.postDelayed(this,500);
+        if(ControlLock.locked(PlaybackService.this))cancelPlayGesture();
+        if(proxy!=null && (settings.flag("force_offline",false) || !online.homeWifi())) {recordProgress(false);player.reset();prepared=false;closeStream();message="Offline: stream stopped.";publish();}
+        if(prepared){recordProgress(false);int position=player.getCurrentPosition(),duration=player.getDuration();state=new State(song,message,player.isPlaying(),busy,position,duration,nextSong,queue.isEmpty()?0:index+1,queue.size(),song!=null && store.isLiked(song.id));}main.postDelayed(this,500);
     }};
     public void onAudioFocusChange(int change) {
         if(change==AudioManager.AUDIOFOCUS_LOSS){resumeAfterFocus=false;pause();}
@@ -280,6 +339,6 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
         else if(change==AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK){if(prepared)player.setVolume(.2f,.2f);}
         else if(change==AudioManager.AUDIOFOCUS_GAIN){if(prepared)player.setVolume(1,1);if(resumeAfterFocus){resumeAfterFocus=false;startLocal();}}
     }
-    public void onDestroy(){destroyed=true;Log.i("OnLoopio","SERVICE_DESTROY");downloadGeneration++;generation++;main.removeCallbacksAndMessages(null);worker.shutdownNow();downloadWorker.shutdownNow();closeStream();if(equalizer!=null)equalizer.release();player.release();audio.abandonAudioFocus(this);audio.unregisterMediaButtonEventReceiver(buttons);audio.unregisterRemoteControlClient(remote);unregisterReceiver(noisy);store.close();stopForeground(true);state=new State(null,"Choose a track to play.",false,false,0,0);downloads=new DownloadState(null,0,-1,0,"Idle");protectedTracks=Collections.emptySet();super.onDestroy();}
+    public void onDestroy(){recordProgress(false);cancelPlayGesture();destroyed=true;Log.i("OnLoopio","SERVICE_DESTROY");downloadGeneration++;generation++;main.removeCallbacksAndMessages(null);worker.shutdownNow();downloadWorker.shutdownNow();closeStream();if(equalizer!=null)equalizer.release();player.release();audio.abandonAudioFocus(this);audio.unregisterMediaButtonEventReceiver(buttons);audio.unregisterRemoteControlClient(remote);unregisterReceiver(noisy);unregisterReceiver(feedbackUpdated);store.close();stopForeground(true);state=new State(null,"Choose a track to play.",false,false,0,0);downloads=new DownloadState(null,0,-1,0,"Idle");protectedTracks=Collections.emptySet();super.onDestroy();}
     public IBinder onBind(Intent intent){return null;}
 }

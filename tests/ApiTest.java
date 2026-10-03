@@ -4,9 +4,7 @@ import io.onloopio.api.ServerConfig;
 import io.onloopio.model.Playlist;
 import io.onloopio.model.PlaylistDetail;
 import io.onloopio.model.Library;
-import com.sun.net.httpserver.HttpServer;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
+import io.onloopio.model.ListenEvent;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
@@ -27,6 +25,8 @@ public final class ApiTest {
     static volatile boolean validAuth = true;
     static final Set<String> salts = new HashSet<String>();
     static int checks;
+    static volatile Map<String,String> lastParams;
+    static volatile String lastPath,lastQuery;
     static void check(boolean condition, String label) { if (!condition) throw new AssertionError(label); checks++; }
     interface Action { void run() throws Exception; }
     static void rejects(Action action, String label) throws Exception {
@@ -37,14 +37,15 @@ public final class ApiTest {
         check("26719a1196d2a940705a59634eb18eab".equals(NavidromeClient.authenticationToken("sesame","c19b2d")),"Official token example");
         try { new ServerConfig("https://user:pass@localhost","a","b"); throw new AssertionError("URL credentials accepted"); }
         catch (IllegalArgumentException expected) { checks++; }
-        HttpServer fixture = HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
-        fixture.createContext("/prefix/rest/",new HttpHandler() {
-            public void handle(HttpExchange exchange) throws IOException {
+        HttpFixture fixture = new HttpFixture(new InetSocketAddress("127.0.0.1",0));
+        fixture.createContext("/prefix/rest/",new HttpFixture.Handler() {
+            public void handle(HttpFixture.Exchange exchange) throws IOException {
                 Map<String,String> params = new HashMap<String,String>();
                 for (String part : exchange.getRequestURI().getRawQuery().split("&")) {
                     String[] kv=part.split("=",2); params.put(URLDecoder.decode(kv[0],"UTF-8"),URLDecoder.decode(kv[1],"UTF-8"));
                 }
                 String salt = params.get("s");
+                lastParams=params;lastPath=exchange.getRequestURI().getPath();lastQuery=exchange.getRequestURI().getRawQuery();
                 validAuth &= "name + Ж".equals(params.get("u")) && salt != null && salt.length() == 32 && salts.add(salt) &&
                         NavidromeClient.authenticationToken("pass&Ж",salt).equals(params.get("t")) && !params.containsKey("p");
                 byte[] bytes = response.getBytes("UTF-8");
@@ -56,6 +57,22 @@ public final class ApiTest {
         final NavidromeClient client = new NavidromeClient(new ServerConfig("http://127.0.0.1:"+fixture.getAddress().getPort()+"/prefix/","name + Ж","pass&Ж"));
         try {
             response = HEAD+END; client.ping(); checks++;
+            client.star("song & Ж");check(lastPath.endsWith("/star.view") && "song & Ж".equals(lastParams.get("id")),"Star ID and endpoint");
+            client.unstar("song & Ж");check(lastPath.endsWith("/unstar.view"),"Unstar endpoint");
+            response=HEAD+"<starred2><artist id='ar'/><album id='al'/><song id='liked' title='Favorite' duration='60'/></starred2>"+END;
+            check(client.getStarred2().size()==1 && "liked".equals(client.getStarred2().get(0).id),"Only starred songs, ignoring albums and artists");
+            response=HEAD+"<starred2/>"+END;check(client.getStarred2().isEmpty(),"Empty starred snapshot");
+            response=HEAD+END;rejects(new Action(){public void run()throws Exception{client.getStarred2();}},"Missing starred root");
+            response=HEAD+"<starred2><song id='same'/><song id='same'/></starred2>"+END;rejects(new Action(){public void run()throws Exception{client.getStarred2();}},"Repeated starred IDs");
+            response=HEAD+"<starred2><song title='missing'/></starred2>"+END;rejects(new Action(){public void run()throws Exception{client.getStarred2();}},"Starred song missing ID");
+            response=HEAD+"<starred2><song id='s'/>";rejects(new Action(){public void run()throws Exception{client.getStarred2();}},"Truncated starred XML");
+            response=HEAD+END;
+            String account="http://127.0.0.1:"+fixture.getAddress().getPort()+"/prefix\nname + Ж";
+            client.scrobble(java.util.Arrays.asList(new ListenEvent("one",account,"repeat & Ж",1000),new ListenEvent("two",account,"repeat & Ж",2000)));
+            check(lastPath.endsWith("/scrobble.view") && "true".equals(lastParams.get("submission")),"Scrobble submission");
+            check(lastQuery.contains("&time=1000") && lastQuery.contains("&time=2000") && lastQuery.split("&id=",-1).length==3,"Repeated IDs and original times retained");
+            rejects(new Action(){public void run()throws Exception{client.scrobble(java.util.Collections.singletonList(new ListenEvent("bad","other","s",1000)));}},"Wrong scrobble account");
+            rejects(new Action(){public void run()throws Exception{client.star("local:file");}},"Local track sent to server");
             response = HEAD+"<playlists/>"+END; check(client.getPlaylists().isEmpty(),"Empty list");
             response = HEAD+"<playlists><playlist id='p&amp;1' name='Daily &amp; Mix' songCount='2' duration='123' changed='today'/></playlists>"+END;
             List<Playlist> playlists = client.getPlaylists();
@@ -76,6 +93,7 @@ public final class ApiTest {
             response = "<subsonic-response status='failed'><error code='40' message='secret server text'/></subsonic-response>";
             try { client.ping(); throw new AssertionError("Auth failure accepted"); }
             catch (ApiException e) { check(e.code==40 && !e.getMessage().contains("secret"),"Safe API error"); }
+            rejects(new Action(){public void run()throws Exception{client.star("s");}},"Failed star acknowledged");
             response = HEAD+END; rejects(new Action(){public void run() throws Exception {client.getPlaylists();}},"Missing collection");
             response = "<html>proxy</html>"; rejects(new Action(){public void run() throws Exception {client.ping();}},"HTML response");
             response = HEAD+"<playlists><playlist name='missing ID'/></playlists>"+END; rejects(new Action(){public void run() throws Exception {client.getPlaylists();}},"Missing ID");

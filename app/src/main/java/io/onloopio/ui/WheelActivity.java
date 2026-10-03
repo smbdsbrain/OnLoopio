@@ -20,12 +20,13 @@ import java.util.List;
 /** Shared wheel navigation: choices and confirmations never require text entry. */
 abstract class WheelActivity extends Activity {
     static final class Item {
-        final String label; final Runnable action; final Integer swatchColor;
+        final String label,key; final Runnable action; final Integer swatchColor;
         Item(String label,Runnable action) { this(label,action,null); }
-        Item(String label,Runnable action,Integer swatchColor) { this.label=label; this.action=action; this.swatchColor=swatchColor; }
+        Item(String label,Runnable action,Integer swatchColor) { this(label,action,swatchColor,label); }
+        Item(String label,Runnable action,Integer swatchColor,String key) { this.label=label; this.action=action; this.swatchColor=swatchColor;this.key=key; }
     }
     abstract static class Menu {
-        final String title; String note="Wheel: choose · Centre: apply · Back: cancel"; int selected;
+        final String title; String note="Wheel: choose · Centre: apply · Back: cancel",selectedRow; int selected,top;
         Menu(String title) { this.title=title; }
         abstract List<Item> items();
     }
@@ -45,12 +46,20 @@ abstract class WheelActivity extends Activity {
         getWindow().setFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN,android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN);
     }
     protected void onResume() { super.onResume(); if(ControlLock.locked(this)){returnToPlayer();return;}if(!stack.isEmpty()) render(); }
-    protected void onPause(){center.cancel();super.onPause();}
+    protected void onPause(){remember();center.cancel();super.onPause();}
     private void returnToPlayer(){startActivity(new android.content.Intent(this,PlaylistActivity.class).setAction("io.onloopio.OPEN_PLAYER").addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP));}
     void show(Menu menu) { remember(); stack.add(menu); render(); }
-    void remember() { if(list!=null && !stack.isEmpty()) stack.get(stack.size()-1).selected=Math.max(0,list.getSelectedItemPosition()); }
+    void remember() {
+        if(list==null || stack.isEmpty())return;int selected=list.getSelectedItemPosition();if(selected<0)return;
+        Menu menu=stack.get(stack.size()-1);menu.selected=selected;
+        if(selected<rows.size())menu.selectedRow=rows.get(selected).key;
+        View row=list.getChildAt(selected-list.getFirstVisiblePosition());menu.top=row==null?0:row.getTop()-list.getPaddingTop();
+    }
     void render() {
         Menu menu=stack.get(stack.size()-1); rows=menu.items();
+        int selected=menu.selected,nearest=-1;
+        if(menu.selectedRow!=null)for(int n=0;n<rows.size();n++)if(menu.selectedRow.equals(rows.get(n).key) && (nearest<0 || Math.abs(n-selected)<Math.abs(nearest-selected)))nearest=n;
+        if(nearest>=0)selected=nearest;
         LinearLayout page=Ui.page(this); page.addView(Ui.title(this,menu.title));
         status=Ui.text(this,menu.note,11,Ui.FG); page.addView(status);
         list=new ListView(this); list.setSoundEffectsEnabled(false); list.setCacheColorHint(Ui.BG); list.setDividerHeight(1);
@@ -67,11 +76,11 @@ abstract class WheelActivity extends Activity {
         });
         list.setOnItemClickListener(new AdapterView.OnItemClickListener() { public void onItemClick(AdapterView<?> parent,View view,int position,long id) { activate(position); } });
         page.addView(list,new LinearLayout.LayoutParams(-1,0,1)); setContentView(page);
-        list.setSelection(Math.min(menu.selected,Math.max(0,rows.size()-1))); list.requestFocus();
+        list.requestFocus();list.setSelectionFromTop(Math.min(selected,Math.max(0,rows.size()-1)),menu.top);
     }
     void activate(int position) {
         if(ControlLock.locked(this))return;
-        if(position<0 || position>=rows.size()) return;activateItem(rows.get(position));
+        if(position<0 || position>=rows.size()) return;if(list.getSelectedItemPosition()!=position)list.setSelection(position);activateItem(rows.get(position));
     }
     private void activateItem(Item item) {
         if(ControlLock.locked(this))return;remember();

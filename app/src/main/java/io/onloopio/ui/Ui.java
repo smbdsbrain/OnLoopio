@@ -13,7 +13,7 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-final class Ui {
+public final class Ui {
     static int BG = Color.rgb(18, 27, 23), FG = Color.rgb(237, 243, 231), ACCENT = Color.rgb(183, 239, 96);
     static int SELECTION=blend(BG,ACCENT,.20f),SURFACE=blend(BG,FG,.08f),TRACK=blend(BG,FG,.24f);
     static void palette(Context c) {
@@ -72,8 +72,10 @@ final class Ui {
         TextView view = row(c,label); view.setFocusable(true); view.setOnClickListener(listener); return view;
     }
     private static final java.util.Map<String,String> RU=new java.util.HashMap<String,String>();
-    static String label(Context context,String value){return translate(context,value).toString();}
+    public static String label(Context context,String value){return translate(context,value).toString();}
     static {
+        String[][] feedback={{"Like","Лайк"},{"Remove like","Снять лайк"},{"Liked","Лайк поставлен"},{"Like removed","Лайк снят"},{"Favorite tracks","Любимые треки"},{"Double Play: like","Двойной Play: лайк"},{"Synchronization","Синхронизация"},{"Synchronizing Navidrome…","Синхронизация Navidrome…"},{"Sending likes and listens…","Отправка лайков и прослушиваний…"},{"Pending feedback","Ожидают отправки"}};
+        for(String[] pair:feedback)RU.put(pair[0],pair[1]);
         String[][] local={{"Scan Music folder","Сканировать папку Music"},{"Share Music over USB","Открыть Music по USB"},{"Return USB storage to player","Вернуть накопитель плееру"},{"Share storage with computer? Playback pauses until storage returns.","Открыть накопитель на ПК? Музыка остановится до возврата накопителя."},{"USB storage shared with computer","Накопитель подключён к ПК"},{"Music library updated","Библиотека обновлена"},{"Ready","Готово"},{"Remove downloaded audio","Удалить загрузки"}};
         for(String[] pair:local)RU.put(pair[0],pair[1]);
         String[][] accents={{"Accent color","Акцентный цвет"},{"Theme default","Цвет темы"},{"Lime","Лайм"},{"Emerald","Изумрудный"},{"Turquoise","Бирюзовый"},{"Sky blue","Голубой"},{"Indigo","Индиго"},{"Violet","Фиолетовый"},{"Rose","Розовый"},{"Coral","Коралловый"},{"Orange","Оранжевый"},{"Amber","Янтарный"}};

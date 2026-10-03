@@ -5,9 +5,10 @@ import android.view.KeyEvent;
 
 /** App control lock is independent of the vendor's screen-off wheel policy. */
 public final class ControlLock {
+    public static final String CHANGED="io.onloopio.CONTROLS_CHANGED";
     private ControlLock() {}
     public static boolean locked(Context context) { return new DeviceSettings(context).flag("controls_locked",false); }
-    public static void locked(Context context,boolean value) { new DeviceSettings(context).setFlag("controls_locked",value); }
+    public static void locked(Context context,boolean value) { new DeviceSettings(context).setFlag("controls_locked",value);context.sendBroadcast(new android.content.Intent(CHANGED).setPackage(context.getPackageName())); }
     public static boolean blocks(int code) {
         return Y1Keys.previousRow(code) || Y1Keys.nextRow(code) || code==KeyEvent.KEYCODE_BACK ||
                 code==KeyEvent.KEYCODE_MENU || media(code);

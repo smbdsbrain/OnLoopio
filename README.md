@@ -20,6 +20,7 @@ Screens are real Y1 captures, including an offline download completed on v0.9.0.
 - Play over Wi-Fi or keep selected music on the Y1 for offline listening.
 - Use the wheel and hardware buttons for playback, menus, volume and seeking.
 - Keep music in the USB-visible `Music` folder and play it alongside server music.
+- Like tracks from their menu or with a double Play press; browse Favorite tracks and sync likes and offline listens with Navidrome.
 - Adjust device settings directly on the player.
 
 ## Install in brief

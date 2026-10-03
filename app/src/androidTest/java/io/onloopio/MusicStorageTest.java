@@ -76,6 +76,6 @@ public final class MusicStorageTest extends InstrumentationTestCase {
     public void testV7MigrationRetainsFollowedPlaylistsAndAudioHistory()throws Exception{
         store.getWritableDatabase().execSQL("INSERT INTO playlist VALUES ('p','Saved','r',1,12,1,1)");store.getWritableDatabase().execSQL("INSERT INTO audio_state VALUES ('s',123,456,3,1)");
         store.getWritableDatabase().execSQL("DROP TABLE local_song");store.getWritableDatabase().setVersion(7);store.close();store=new MetadataStore(context);
-        assertEquals(8,store.getReadableDatabase().getVersion());assertTrue(store.followsPlaylist("p"));assertEquals(456L,store.audioState("s").lastPlayed);assertEquals(3,store.audioState("s").plays);assertTrue(store.audioState("s").pinned);assertEquals(0,store.localCount());
+        assertEquals(9,store.getReadableDatabase().getVersion());assertTrue(store.followsPlaylist("p"));assertEquals(456L,store.audioState("s").lastPlayed);assertEquals(3,store.audioState("s").plays);assertTrue(store.audioState("s").pinned);assertEquals(0,store.localCount());
     }
 }

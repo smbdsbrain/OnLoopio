@@ -19,11 +19,12 @@ public final class NowPlayingView extends View {
     private boolean locked,wheelSeeking,wheelArmed;private int wheelProgress,volume,maxVolume=1;
     private final TextPaint text=new TextPaint(Paint.ANTI_ALIAS_FLAG);private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
     public NowPlayingView(Context c){super(c);Ui.palette(c);setFocusable(true);setContentDescription("Now Playing");}
-    public void update(PlaybackService.State state){this.state=state;invalidate();}
+    public void update(PlaybackService.State state){this.state=state;describe();invalidate();}
     public void controls(boolean locked,boolean seeking,boolean armed,int progress,int volume,int maxVolume){
         this.locked=locked;wheelSeeking=seeking;wheelArmed=armed;wheelProgress=progress;this.maxVolume=Math.max(1,maxVolume);this.volume=Math.max(0,Math.min(volume,this.maxVolume));
-        setContentDescription("Now Playing · "+(seeking?"Seek":"Volume")+" · "+this.volume+"/"+this.maxVolume+" · "+(locked?"Controls locked · 4 center taps to unlock":armed?"Wheel enabled":"Full turn to enable · "+progress+"%"));invalidate();
+        describe();invalidate();
     }
+    private void describe(){setContentDescription("Now Playing · "+(wheelSeeking?"Seek":"Volume")+" · "+volume+"/"+maxVolume+" · "+(locked?"Controls locked · 4 center taps to unlock":wheelArmed?"Wheel enabled":"Full turn to enable · "+wheelProgress+"%")+" · "+Ui.label(getContext(),"Double Play: like")+(state.liked?" · ♥":""));}
     public void covers(Bitmap current,Bitmap next){cover=current;nextCover=next;invalidate();}
     public boolean hasCover(){return cover!=null;}public boolean hasNextCover(){return nextCover!=null;}
     private void line(Canvas c,String value,float x,float y,int size,int color,float width,boolean bold){text.setTextSize(size);text.setColor(color);text.setTypeface(bold?Typeface.DEFAULT_BOLD:Typeface.DEFAULT);c.drawText(TextUtils.ellipsize(value==null?"":value,text,width,TextUtils.TruncateAt.END).toString(),x,y,text);}
@@ -36,6 +37,7 @@ public final class NowPlayingView extends View {
         line(canvas,Ui.label(getContext(),"NOW PLAYING"),16,28,12,Ui.ACCENT,220,true);line(canvas,Ui.deviceInfo(getContext()),340,28,11,Ui.FG,124,false);
         line(canvas,Ui.label(getContext(),locked?"LOCKED":"4×: lock"),238,28,10,Ui.ACCENT,92,true);
         Song song=state.song;art(canvas,cover,16,48,196);
+        if(song!=null && state.liked){paint.setColor(Ui.SURFACE);canvas.drawCircle(191,222,15,paint);line(canvas,"♥",180,230,23,Ui.ACCENT,25,true);}
         if(song==null){line(canvas,Ui.label(getContext(),"Choose your music"),230,82,21,Ui.FG,234,true);line(canvas,Ui.label(getContext(),"Hold center for library"),230,112,14,Ui.ACCENT,234,false);}
         else{
             String title=song.title;text.setTextSize(21);text.setTypeface(Typeface.DEFAULT_BOLD);int count=text.breakText(title,true,230,null);

@@ -51,18 +51,18 @@ public final class LauncherTest extends InstrumentationTestCase {
         final ListView list=(ListView)findList(home.getWindow().getDecorView());
         assertNotNull(list); assertEquals("Playlists",list.getAdapter().getItem(0));
         assertEquals("Artists",list.getAdapter().getItem(1)); assertEquals("Albums",list.getAdapter().getItem(2)); assertEquals("Tracks",list.getAdapter().getItem(3));
-        assertEquals(7,list.getAdapter().getCount());assertEquals("Genres",list.getAdapter().getItem(4));assertEquals("Now Playing",list.getAdapter().getItem(5));assertEquals("Settings",list.getAdapter().getItem(6));
+        assertEquals(8,list.getAdapter().getCount());assertEquals("Genres",list.getAdapter().getItem(4));assertEquals("Now Playing",list.getAdapter().getItem(5));assertEquals("Settings",list.getAdapter().getItem(6));assertEquals("Favorite tracks",list.getAdapter().getItem(7));
         keys(KeyEvent.KEYCODE_DPAD_CENTER);
         for(int n=0;n<100 && list.getAdapter().getCount()<=2;n++) Thread.sleep(100);
         assertTrue("Synced playlists did not open",list.getAdapter().getCount()>2);
         keys(KeyEvent.KEYCODE_BACK,KeyEvent.KEYCODE_DPAD_DOWN,KeyEvent.KEYCODE_DPAD_CENTER);
         getInstrumentation().waitForIdleSync(); assertTrue("Artists were not derived from synced metadata",list.getAdapter().getCount()>1);
-        keys(KeyEvent.KEYCODE_BACK,KeyEvent.KEYCODE_DPAD_DOWN,KeyEvent.KEYCODE_DPAD_DOWN,KeyEvent.KEYCODE_DPAD_CENTER);
+        keys(KeyEvent.KEYCODE_BACK,KeyEvent.KEYCODE_DPAD_DOWN,KeyEvent.KEYCODE_DPAD_CENTER);
         io.onloopio.db.MetadataStore metadata=new io.onloopio.db.MetadataStore(getInstrumentation().getTargetContext());String name;
         try {name=metadata.catalogSongs().get(0).album;} finally {metadata.close();}
-        int position=-1;for(int n=0;n<list.getAdapter().getCount();n++)if(name.equals(list.getAdapter().getItem(n))){position=n;break;}
-        java.util.List<String> displayed=new java.util.ArrayList<String>();for(int n=0;n<Math.min(5,list.getAdapter().getCount());n++)displayed.add(list.getAdapter().getItem(n).toString());
-        assertTrue("Known catalog album missing: "+name+" rows="+list.getAdapter().getCount()+" first="+displayed,position>=0);final int selected=position;
+        final String album=name;final int[] position={-1},count={0};final java.util.List<String> displayed=new java.util.ArrayList<String>();
+        getInstrumentation().runOnMainSync(new Runnable(){public void run(){count[0]=list.getAdapter().getCount();for(int n=0;n<count[0];n++)if(album.equals(list.getAdapter().getItem(n))){position[0]=n;break;}for(int n=0;n<Math.min(5,count[0]);n++)displayed.add(list.getAdapter().getItem(n).toString());}});
+        assertTrue("Known catalog album missing: "+name+" rows="+count[0]+" first="+displayed,position[0]>=0);final int selected=position[0];
         getInstrumentation().runOnMainSync(new Runnable(){public void run(){list.setSelection(selected);}});Thread.sleep(150);keys(KeyEvent.KEYCODE_DPAD_CENTER);
         assertTrue("Known album tracks did not open",list.getAdapter().getCount()>1);
         keys(KeyEvent.KEYCODE_BACK,KeyEvent.KEYCODE_BACK);assertFalse(home.isFinishing());

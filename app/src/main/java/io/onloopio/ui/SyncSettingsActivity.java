@@ -21,7 +21,7 @@ public final class SyncSettingsActivity extends WheelActivity {
     private void changed(){SyncScheduler.ensure(this,true);}
     private Item toggle(final String label,final String key){return new Item(label+": "+(prefs.flag(key,true)?"On":"Off"),new Runnable(){public void run(){choose(label,new String[]{"Off","On"},prefs.flag(key,true)?1:0,new Choice(){public void apply(int n){prefs.setFlag(key,n==1);changed();}});}});}
     Menu rootMenu(){return new Menu("Playlist synchronization"){List<Item> items(){
-        long checked=store.lastPlaylistCheck();note="Last check: "+(checked==0?"Never":new java.text.SimpleDateFormat("dd MMM HH:mm",java.util.Locale.getDefault()).format(new java.util.Date(checked)))+"\n"+prefs.text("sync_status","Waiting for a check");
+        long checked=store.lastPlaylistCheck();note="Last check: "+(checked==0?"Never":new java.text.SimpleDateFormat("dd MMM HH:mm",java.util.Locale.getDefault()).format(new java.util.Date(checked)))+"\n"+prefs.text("sync_status","Waiting for a check")+"\n"+Ui.label(SyncSettingsActivity.this,"Pending feedback")+": "+store.pendingFeedback(store.accountKey());
         List<Item> rows=new ArrayList<Item>();rows.add(toggle("Automatic playlist sync","playlist_auto_sync"));
         final int minutes=prefs.number("sync_interval_minutes",SyncScheduler.DEFAULT_MINUTES);
         rows.add(new Item("Check every: "+(minutes==0?"Off":minutes+" min"),new Runnable(){public void run(){String[] labels=new String[MINUTES.length];int selected=0;for(int n=0;n<MINUTES.length;n++){labels[n]=MINUTES[n]==0?"Off":MINUTES[n]+" min";if(MINUTES[n]==minutes)selected=n;}choose("Check every",labels,selected,new Choice(){public void apply(int n){prefs.setNumber("sync_interval_minutes",MINUTES[n]);changed();}});}}));

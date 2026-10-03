@@ -4,6 +4,7 @@ import io.onloopio.model.Playlist;
 import io.onloopio.model.PlaylistDetail;
 import io.onloopio.model.Song;
 import io.onloopio.model.Library;
+import io.onloopio.model.ListenEvent;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -29,6 +30,19 @@ public final class NavidromeClient {
     public NavidromeClient(ServerConfig config) { this.config = config; }
     public void ping() throws IOException { request("ping", null); }
     public List<Playlist> getPlaylists() throws IOException { return request("getPlaylists", null).playlists; }
+    private static void serverSong(String id)throws IOException {if(id==null || id.length()==0 || id.startsWith("local:"))throw new IOException("Invalid server song ID.");}
+    public void star(String id)throws IOException {serverSong(id);request("star",id);}
+    public void unstar(String id)throws IOException {serverSong(id);request("unstar",id);}
+    public List<Song> getStarred2()throws IOException {
+        List<Song> songs=request("getStarred2",null).songs;java.util.Set<String> seen=new java.util.HashSet<String>();
+        for(Song song:songs){serverSong(song.id);if(!seen.add(song.id))throw new IOException("Repeated starred song.");}return songs;
+    }
+    public void scrobble(List<ListenEvent> events)throws IOException {
+        if(events==null || events.isEmpty() || events.size()>25)throw new IOException("Invalid scrobble batch.");
+        StringBuilder extra=new StringBuilder("&submission=true");
+        for(ListenEvent event:events){serverSong(event.songId);if(event.time<0 || !config.accountKey().equals(event.account))throw new IOException("Invalid scrobble account or time.");extra.append("&id=").append(encode(event.songId)).append("&time=").append(event.time);}
+        request("scrobble",null,extra.toString());
+    }
     public Library catalogPage(int artistOffset,int albumOffset,int songOffset,int count) throws IOException {
         if(count<1 || count>500 || artistOffset<0 || albumOffset<0 || songOffset<0) throw new IOException("Invalid catalog pagination.");
         return request("search3",null,"&query=&artistCount="+count+"&albumCount="+count+"&songCount="+count+"&artistOffset="+artistOffset+"&albumOffset="+albumOffset+"&songOffset="+songOffset).library;
@@ -198,6 +212,8 @@ public final class NavidromeClient {
                     collection = true;
                 } else if("searchResult3".equals(tag) && parser.getDepth()==2 && "search3".equals(method)) {
                     collection=true;
+                } else if("starred2".equals(tag) && parser.getDepth()==2 && "getStarred2".equals(method)) {
+                    collection=true;
                 } else if("search3".equals(method) && collection && parser.getDepth()==3 && ("artist".equals(tag) || "album".equals(tag))) {
                     String id=attribute(parser,"id",""); if(id.length()==0) throw new IOException("Catalog entity missing ID.");
                     Library.Entity entity=new Library.Entity(id,attribute(parser,"name","Untitled"),attribute(parser,"artistId",""),attribute(parser,"artist",""));
@@ -209,7 +225,7 @@ public final class NavidromeClient {
                     if (id.length() == 0) throw new IOException("Playlist is missing its ID.");
                     result.playlists.add(new Playlist(id, attribute(parser, "name", "Untitled"),
                             attribute(parser, "changed", ""), integer(parser, "songCount"), number(parser, "duration")));
-                } else if ((("entry".equals(tag) && "getPlaylist".equals(method)) || ("song".equals(tag) && "search3".equals(method) && collection)) && parser.getDepth() == 3) {
+                } else if ((("entry".equals(tag) && "getPlaylist".equals(method)) || ("song".equals(tag) && ("search3".equals(method) || "getStarred2".equals(method)) && collection)) && parser.getDepth() == 3) {
                     String id = attribute(parser, "id", "");
                     if (id.length() == 0) throw new IOException("Song is missing its ID.");
                     Song song=new Song(id, attribute(parser, "title", "Untitled"), attribute(parser, "artist", ""),
@@ -221,6 +237,7 @@ public final class NavidromeClient {
             if (!ok) throw new ApiException(error < 0 ? 0 : error);
             if ("getPlaylists".equals(method) && !collection) throw new IOException("Invalid playlist list response.");
             if("search3".equals(method) && !collection) throw new IOException("Invalid catalog response.");
+            if("getStarred2".equals(method) && !collection) throw new IOException("Invalid starred response.");
             return result;
         } catch (IOException e) { throw e; }
         catch (Exception e) { throw new IOException("Cannot read server XML response."); }

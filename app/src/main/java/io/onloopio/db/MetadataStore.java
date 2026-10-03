@@ -10,14 +10,17 @@ import io.onloopio.model.PlaylistDetail;
 import io.onloopio.model.Song;
 import io.onloopio.model.Library;
 import io.onloopio.model.CacheKey;
+import io.onloopio.model.LikeChange;
+import io.onloopio.model.ListenEvent;
+import io.onloopio.sync.BacksyncEngine;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 /** Playlist metadata and its deduplicated library. Audio files live separately on SD. */
-public final class MetadataStore extends SQLiteOpenHelper {
-    public MetadataStore(Context context) { super(context, "onloopio.db", null, 8); }
+public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEngine.Repository {
+    public MetadataStore(Context context) { super(context, "onloopio.db", null, 9); }
     public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE server (id INTEGER PRIMARY KEY CHECK(id=1), account_key TEXT NOT NULL, last_successful_sync INTEGER NOT NULL DEFAULT 0, catalog_synced INTEGER NOT NULL DEFAULT 0, playlist_checked_at INTEGER NOT NULL DEFAULT 0, playlist_audited_at INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE TABLE playlist (id TEXT PRIMARY KEY, name TEXT NOT NULL, changed TEXT NOT NULL, song_count INTEGER NOT NULL, duration INTEGER NOT NULL, detail_cached INTEGER NOT NULL DEFAULT 0, offline_sync INTEGER NOT NULL DEFAULT 0)");
@@ -29,6 +32,12 @@ public final class MetadataStore extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE download_queue (song_id TEXT PRIMARY KEY, position INTEGER NOT NULL, state INTEGER NOT NULL DEFAULT 0, received INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT -1, error TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL DEFAULT 0)");
         audioState(db);
         localTable(db);
+        feedbackTables(db);
+    }
+    private static void feedbackTables(SQLiteDatabase db){
+        db.execSQL("CREATE TABLE track_like(account_key TEXT NOT NULL,song_id TEXT NOT NULL,liked INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0,dirty INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_key,song_id))");
+        db.execSQL("CREATE TABLE listen_event(session_id TEXT PRIMARY KEY,account_key TEXT NOT NULL,song_id TEXT NOT NULL,listened_at INTEGER NOT NULL)");
+        db.execSQL("CREATE INDEX listen_event_account ON listen_event(account_key,listened_at,session_id)");
     }
     private static void audioState(SQLiteDatabase db){db.execSQL("CREATE TABLE audio_state (song_id TEXT PRIMARY KEY, downloaded_at INTEGER NOT NULL DEFAULT 0, last_played INTEGER NOT NULL DEFAULT 0, play_count INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0)");}
     private static void localTable(SQLiteDatabase db){db.execSQL("CREATE TABLE local_song(id TEXT PRIMARY KEY,title TEXT NOT NULL,artist TEXT NOT NULL,album TEXT NOT NULL,suffix TEXT NOT NULL,duration INTEGER NOT NULL,album_id TEXT NOT NULL,track INTEGER NOT NULL,artist_id TEXT NOT NULL,genre TEXT NOT NULL,disc INTEGER NOT NULL,cover_art TEXT NOT NULL,path TEXT NOT NULL UNIQUE,bytes INTEGER NOT NULL,modified INTEGER NOT NULL)");}
@@ -49,6 +58,7 @@ public final class MetadataStore extends SQLiteOpenHelper {
         }
         if(oldVersion==6 && newVersion>=7){db.execSQL("ALTER TABLE playlist ADD COLUMN offline_sync INTEGER NOT NULL DEFAULT 0");db.execSQL("ALTER TABLE server ADD COLUMN playlist_checked_at INTEGER NOT NULL DEFAULT 0");db.execSQL("ALTER TABLE server ADD COLUMN playlist_audited_at INTEGER NOT NULL DEFAULT 0");oldVersion=7;}
         if(oldVersion==7 && newVersion>=8){localTable(db);oldVersion=8;}
+        if(oldVersion==8 && newVersion>=9){feedbackTables(db);oldVersion=9;}
         if(oldVersion==newVersion)return;
         throw new IllegalStateException("No migration defined for database version " + oldVersion);
     }
@@ -214,6 +224,77 @@ public final class MetadataStore extends SQLiteOpenHelper {
     public synchronized AudioState audioState(String id){Cursor c=getReadableDatabase().rawQuery("SELECT downloaded_at,last_played,play_count,pinned FROM audio_state WHERE song_id=?",new String[]{id});try{return c.moveToFirst()?new AudioState(c.getLong(0),c.getLong(1),c.getInt(2),c.getInt(3)!=0):new AudioState(0,0,0,false);}finally{c.close();}}
     public synchronized void downloaded(String id,long when){ensureAudioState(id);ContentValues v=new ContentValues();v.put("downloaded_at",when);getWritableDatabase().update("audio_state",v,"song_id=?",new String[]{id});}
     public synchronized void listened(String id,long when){ensureAudioState(id);getWritableDatabase().execSQL("UPDATE audio_state SET last_played=?,play_count=play_count+1 WHERE song_id=?",new Object[]{when,id});}
+    /** Count and enqueue together. Local files never enter the server outbox. */
+    public synchronized void recordListening(ListenEvent event,long qualifiedAt){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
+            if(!event.songId.startsWith("local:")){
+                if(event.account==null || !event.account.equals(accountKey()))return;
+                ContentValues v=new ContentValues();v.put("session_id",event.sessionId);v.put("account_key",event.account);v.put("song_id",event.songId);v.put("listened_at",event.time);
+                if(db.insertWithOnConflict("listen_event",null,v,SQLiteDatabase.CONFLICT_IGNORE)==-1)return;
+            }
+            listened(event.songId,qualifiedAt);db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    private String likeAccount(String id){String key=id.startsWith("local:")?"":accountKey();return key==null?"":key;}
+    public synchronized boolean isLiked(String id){
+        Cursor c=getReadableDatabase().rawQuery("SELECT liked FROM track_like WHERE account_key=? AND song_id=?",new String[]{likeAccount(id),id});
+        try{return c.moveToFirst() && c.getInt(0)!=0;}finally{c.close();}
+    }
+    public synchronized Set<String> likedIds(){
+        String key=accountKey();Set<String> result=new HashSet<String>();Cursor c=getReadableDatabase().rawQuery("SELECT song_id FROM track_like WHERE liked=1 AND (account_key=? OR account_key='')",new String[]{key==null?"":key});
+        try{while(c.moveToNext())result.add(c.getString(0));}finally{c.close();}return result;
+    }
+    public synchronized boolean toggleLike(String account,String id){
+        boolean local=id.startsWith("local:");
+        String owner=local?"":account;SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
+            if(!local && (account==null || !account.equals(accountKey())))throw new IllegalStateException("Account changed");
+            boolean liked=!isLiked(id);ContentValues v=new ContentValues();v.put("account_key",owner);v.put("song_id",id);
+            db.insertWithOnConflict("track_like",null,v,SQLiteDatabase.CONFLICT_IGNORE);
+            db.execSQL("UPDATE track_like SET liked=?,revision=revision+1,dirty=? WHERE account_key=? AND song_id=?",new Object[]{liked?1:0,local?0:1,owner,id});
+            db.setTransactionSuccessful();return liked;
+        }finally{db.endTransaction();}
+    }
+    public synchronized List<Song> favoriteSongs(){
+        Set<String> liked=likedIds();List<Song> result=new ArrayList<Song>();
+        for(Song song:songs())if(liked.contains(song.id))result.add(song);
+        for(Song song:localSongs())if(liked.contains(song.id))result.add(song);return result;
+    }
+    public synchronized int pendingFeedback(String account){
+        if(account==null)return 0;
+        Cursor c=getReadableDatabase().rawQuery("SELECT (SELECT COUNT(*) FROM track_like WHERE account_key=? AND dirty=1)+(SELECT COUNT(*) FROM listen_event WHERE account_key=?)",new String[]{account,account});
+        try{c.moveToFirst();return c.getInt(0);}finally{c.close();}
+    }
+    public synchronized List<LikeChange> pendingLikes(String account,int limit){
+        List<LikeChange> result=new ArrayList<LikeChange>();Cursor c=getReadableDatabase().rawQuery("SELECT song_id,liked,revision FROM track_like WHERE account_key=? AND dirty=1 ORDER BY song_id LIMIT ?",new String[]{account,Integer.toString(limit)});
+        try{while(c.moveToNext())result.add(new LikeChange(account,c.getString(0),c.getInt(1)!=0,c.getLong(2)));}finally{c.close();}return result;
+    }
+    public synchronized void acknowledgeLike(LikeChange change){
+        ContentValues v=new ContentValues();v.put("dirty",0);getWritableDatabase().update("track_like",v,"account_key=? AND song_id=? AND revision=?",new String[]{change.account,change.songId,Long.toString(change.revision)});
+    }
+    public synchronized List<ListenEvent> pendingListens(String account,int limit){
+        List<ListenEvent> result=new ArrayList<ListenEvent>();Cursor c=getReadableDatabase().rawQuery("SELECT session_id,song_id,listened_at FROM listen_event WHERE account_key=? ORDER BY listened_at,session_id LIMIT ?",new String[]{account,Integer.toString(limit)});
+        try{while(c.moveToNext())result.add(new ListenEvent(c.getString(0),account,c.getString(1),c.getLong(2)));}finally{c.close();}return result;
+    }
+    public synchronized void acknowledgeListens(List<ListenEvent> events){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
+            for(ListenEvent event:events)db.delete("listen_event","account_key=? AND session_id=?",new String[]{event.account,event.sessionId});db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    /** Only a complete remote snapshot clears clean likes. Offline edits retain priority. */
+    public synchronized void applyStarredSnapshot(String account,List<Song> songs){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
+            if(!account.equals(accountKey()))throw new IllegalStateException("Account changed");
+            Set<String> seen=new HashSet<String>();for(Song song:songs)if(song.id.length()==0 || song.id.startsWith("local:") || !seen.add(song.id))throw new IllegalArgumentException("Invalid starred snapshot");
+            db.execSQL("UPDATE track_like SET liked=0 WHERE account_key=? AND dirty=0",new Object[]{account});
+            for(Song song:songs){
+                ContentValues metadata=songValues(song);if(db.update("song",metadata,"id=?",new String[]{song.id})==0)db.insertOrThrow("song",null,metadata);
+                ContentValues v=new ContentValues();v.put("account_key",account);v.put("song_id",song.id);v.put("liked",1);
+                db.insertWithOnConflict("track_like",null,v,SQLiteDatabase.CONFLICT_IGNORE);
+                db.execSQL("UPDATE track_like SET liked=1 WHERE account_key=? AND song_id=? AND dirty=0",new Object[]{account,song.id});
+            }
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
     public synchronized void pin(List<String> ids,boolean pinned){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{for(String id:ids){ensureAudioState(id);ContentValues v=new ContentValues();v.put("pinned",pinned?1:0);db.update("audio_state",v,"song_id=?",new String[]{id});}db.setTransactionSuccessful();}finally{db.endTransaction();}}
     public synchronized Set<String> queuedIds(){Set<String> ids=new HashSet<String>();Cursor c=getReadableDatabase().rawQuery("SELECT song_id FROM download_queue WHERE state<>2",null);try{while(c.moveToNext())ids.add(c.getString(0));}finally{c.close();}return ids;}
     private static ContentValues values(Playlist p) {

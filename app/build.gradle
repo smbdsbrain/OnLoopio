@@ -1,14 +1,16 @@
 plugins { id 'com.android.application' }
 android {
     namespace 'io.onloopio'
+    testNamespace 'io.onloopio.tests'
     compileSdk 35
     defaultConfig {
         applicationId 'io.onloopio'
         minSdk 17
         targetSdk 17
-        versionCode 15
-        versionName '0.9.0'
+        versionCode 16
+        versionName '0.10.0'
         testInstrumentationRunner 'io.onloopio.OnLoopioTestRunner'
+        testApplicationId 'io.onloopio.tests'
         ndk { abiFilters 'armeabi-v7a' }
     }
     compileOptions {
@@ -20,5 +22,13 @@ android {
         release { debuggable false; minifyEnabled false }
     }
     lint { disable 'ExpiredTargetSdkVersion', 'OldTargetApi' }
+    sourceSets { test.java.srcDir rootProject.file('tests') }
 }
-dependencies { implementation 'org.conscrypt:conscrypt-android:2.5.2' }
+dependencies {
+    implementation 'org.conscrypt:conscrypt-android:2.5.2'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'net.sf.kxml:kxml2:2.3.0'
+    androidTestCompileOnly files("${android.sdkDirectory}/platforms/android-${android.compileSdk}/optional/android.test.base.jar",
+        "${android.sdkDirectory}/platforms/android-${android.compileSdk}/optional/android.test.runner.jar",
+        "${android.sdkDirectory}/platforms/android-${android.compileSdk}/optional/android.test.mock.jar")
+}
