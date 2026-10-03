@@ -21,6 +21,22 @@ public final class MetadataTest extends InstrumentationTestCase {
     protected void tearDown() throws Exception { store.close(); super.tearDown(); }
     private Playlist playlist(String id,String name,int count) { return new Playlist(id,name,"revision",count,12); }
     private Song song(String id) { return new Song(id,id,"artist","album","mp3",4); }
+    public void testScalarDefaultsAndAudioIndexBackfill() {
+        assertEquals(0,store.catalogCount());assertEquals(0,store.localCount());assertEquals(0,store.pendingDownloads());assertEquals(0,store.downloadCount(0));assertEquals(0,store.pinnedCount());
+        assertEquals(0L,store.lastRefresh());assertEquals(0L,store.lastPlaylistCheck());assertEquals(0L,store.lastPlaylistAudit());
+        assertNull(store.nextDownload());assertFalse(store.catalogSynced());assertFalse(store.needsAudioIndex());assertFalse(store.hasCatalogSong("missing"));assertFalse(store.followsPlaylist("missing"));assertFalse(store.hasPlaylistDetail("missing"));assertFalse(store.isLiked("missing"));assertFalse(store.protectedFromCleanup("missing"));assertEquals(0,store.pendingFeedback(null));
+        Playlist p=playlist("scalar","Scalar",2);store.replacePlaylists(Arrays.asList(p));store.saveDetail(new PlaylistDetail(p,Arrays.asList(song("a"),song("b"))));
+        assertEquals(2,store.catalogCount());assertTrue(store.hasPlaylistDetail(p.id));assertFalse(store.needsAudioIndex());
+        store.getWritableDatabase().execSQL("UPDATE song SET audio_name='' WHERE id='a'");assertTrue(store.needsAudioIndex());store.backfillAudioIndex();assertFalse(store.needsAudioIndex());assertNotNull(store.song("a"));
+        store.enqueueDownloads(Arrays.asList("a","b"));assertEquals("a",store.nextDownload());assertEquals(2,store.pendingDownloads());assertEquals(2,store.downloadCount(0));
+        store.failedDownload("a");assertEquals("b",store.nextDownload());assertEquals(1,store.downloadCount(1));store.completedDownload("b");assertNull(store.nextDownload());assertEquals(1,store.pendingDownloads());assertEquals(1,store.downloadCount(2));store.retryDownloads();assertEquals("a",store.nextDownload());
+        store.followPlaylist(p.id,true);store.pin(Arrays.asList("a"),true);assertTrue(store.followsPlaylist(p.id));assertTrue(store.protectedFromCleanup("b"));assertEquals(2,store.pinnedCount());store.stopFollowingPlaylists();assertEquals(1,store.pinnedCount());assertTrue(store.protectedFromCleanup("a"));assertFalse(store.protectedFromCleanup("b"));
+    }
+    public void testScalarQueriesWithoutServerRow() {
+        android.content.Context actual=getInstrumentation().getTargetContext();String prefix="scalar_empty_"+System.nanoTime()+"_";MetadataStore empty=new MetadataStore(new RenamingDelegatingContext(actual,prefix));
+        try{assertNull(empty.accountKey());assertNull(empty.nextDownload());assertEquals(0L,empty.lastRefresh());assertEquals(0L,empty.lastPlaylistCheck());assertEquals(0L,empty.lastPlaylistAudit());assertFalse(empty.catalogSynced());assertEquals(0,empty.catalogCount());assertFalse(empty.isLiked("missing"));}
+        finally{empty.close();actual.deleteDatabase(prefix+"onloopio.db");}
+    }
     public void testRepeatedSongsAndOrderPersist() {
         Playlist p=playlist("p","Mix",3);
         store.replacePlaylists(Arrays.asList(p));

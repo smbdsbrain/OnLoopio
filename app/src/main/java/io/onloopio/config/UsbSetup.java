@@ -34,7 +34,7 @@ public final class UsbSetup {
                 throw new IllegalArgumentException("Invalid Wi-Fi settings");
             ServerConfig config=new ServerConfig(server.getString("url"),server.getString("username"),
                     server.getString("password"),server.optString("trustedCa",""));
-            WifiManager wifi=(WifiManager)context.getSystemService(Context.WIFI_SERVICE);
+            WifiManager wifi=(WifiManager)context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             if(wifi==null)throw new IllegalStateException("Wi-Fi unavailable");
             WifiConfiguration saved=new WifiConfiguration(); saved.SSID=quoted(ssid);
             if(password.length()==0)saved.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);

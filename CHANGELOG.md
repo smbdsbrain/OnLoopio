@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.1
+
+- Fixed background HTTPS requests retaining sockets in Android 4.2's connection pool, eventually exhausting file descriptors and crashing SQLite reads when returning to the player.
+- Release active streaming connections when stopping the localhost audio proxy.
+- Use scalar SQLite statements for flags, counters and single IDs, avoiding unnecessary 2 MiB cursor windows on the Y1.
+- Obtain Wi-Fi managers from the application context so settings and sync services can be released on the legacy firmware.
+- Added explicit API-17 resource probes with a disposable keep-alive TLS fixture and an eight-hour background/resume endurance check.
+
 ## 0.10.0
 
 - Added Like / Remove like actions, hearts in track lists and a Favorite tracks library section. Double pressing the lower Play button toggles a like while keeping playback unchanged.

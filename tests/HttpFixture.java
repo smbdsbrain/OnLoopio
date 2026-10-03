@@ -17,9 +17,10 @@ final class HttpFixture {
         void set(String name,String value){values.put(name,value);}
     }
     static final class Exchange {
-        final Socket socket;final URI uri;final Headers headers=new Headers();
-        Exchange(Socket socket,URI uri){this.socket=socket;this.uri=uri;}
+        final Socket socket;final URI uri;final Headers headers=new Headers(),requestHeaders;
+        Exchange(Socket socket,URI uri,Headers requestHeaders){this.socket=socket;this.uri=uri;this.requestHeaders=requestHeaders;}
         URI getRequestURI(){return uri;}
+        Headers getRequestHeaders(){return requestHeaders;}
         Headers getResponseHeaders(){return headers;}
         OutputStream getResponseBody()throws IOException{return socket.getOutputStream();}
         void sendResponseHeaders(int status,long length)throws IOException {
@@ -41,8 +42,10 @@ final class HttpFixture {
             try{
                 socket=server.accept();socket.setSoTimeout(5000);BufferedReader reader=new BufferedReader(new InputStreamReader(socket.getInputStream(),"UTF-8"));
                 String line=reader.readLine();if(line==null)continue;String[] request=line.split(" ");if(request.length<2)continue;
-                URI uri=URI.create(request[1]);while((line=reader.readLine())!=null && !line.isEmpty()){}
-                if(uri.getPath().startsWith(prefix))handler.handle(new Exchange(socket,uri));
+                URI uri=URI.create(request[1]);Headers requestHeaders=new Headers();while((line=reader.readLine())!=null && !line.isEmpty()){
+                    int colon=line.indexOf(':');if(colon>0)requestHeaders.set(line.substring(0,colon).toLowerCase(java.util.Locale.US),line.substring(colon+1).trim());
+                }
+                if(uri.getPath().startsWith(prefix))handler.handle(new Exchange(socket,uri,requestHeaders));
             }catch(IOException closed){/* Size limits/cancellation intentionally close client sockets early. */}
             finally{if(socket!=null)try{socket.close();}catch(IOException ignored){}}
         }

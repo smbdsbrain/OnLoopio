@@ -93,6 +93,9 @@ public final class NavidromeClient {
         connection.setConnectTimeout(10000); connection.setReadTimeout(15000);
         connection.setInstanceFollowRedirects(false); connection.setUseCaches(false);
         connection.setRequestProperty("Accept",accept); connection.setRequestProperty("Accept-Encoding","identity");
+        // API 17 pools by TLS-factory identity without a global idle limit. A fresh
+        // per-request factory otherwise leaves an unreachable pooled socket behind.
+        connection.setRequestProperty("Connection","close");
         if(connection instanceof HttpsURLConnection) ((HttpsURLConnection)connection).setSSLSocketFactory(new Tls12SocketFactory(config.trustedCaPem));
         return connection;
     }
@@ -115,9 +118,9 @@ public final class NavidromeClient {
     }
     public HttpURLConnection stream(String id,String range,String format) throws IOException {
         if(!"raw".equals(format) && !"mp3".equals(format)) throw new IOException("Invalid audio format.");
+        if(range!=null && !range.matches("bytes=[0-9]+-[0-9]*")) throw new IOException("Invalid audio range.");
         HttpURLConnection c=connection("stream",id,"audio/*","&format="+format+("mp3".equals(format)?"&maxBitRate=320":""));
         if(range!=null) {
-            if(!range.matches("bytes=[0-9]+-[0-9]*")) throw new IOException("Invalid audio range.");
             c.setRequestProperty("Range",range);
         }
         try {

@@ -119,7 +119,7 @@ public final class PlaylistSyncService extends Service {
         }});
     }
     private synchronized void holdCpu(){if(wake==null){PowerManager power=(PowerManager)getSystemService(POWER_SERVICE);wake=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"OnLoopio:playlist-sync");wake.setReferenceCounted(false);}wake.acquire(300000);}
-    private synchronized void acquireWifi(){wifi=((WifiManager)getSystemService(WIFI_SERVICE)).createWifiLock(WifiManager.WIFI_MODE_FULL,"OnLoopio:playlist-sync");wifi.setReferenceCounted(false);wifi.acquire();}
+    private synchronized void acquireWifi(){wifi=((WifiManager)getApplicationContext().getSystemService(WIFI_SERVICE)).createWifiLock(WifiManager.WIFI_MODE_FULL,"OnLoopio:playlist-sync");wifi.setReferenceCounted(false);wifi.acquire();}
     private synchronized void releaseLocks(){if(wifi!=null && wifi.isHeld())wifi.release();if(wake!=null && wake.isHeld())wake.release();}
     private synchronized void releaseWifi(){if(wifi!=null && wifi.isHeld())wifi.release();}
     private static String join(Set<String> reasons){StringBuilder text=new StringBuilder();for(String reason:reasons){if(text.length()>0)text.append(", ");text.append(reason);}return text.toString();}
