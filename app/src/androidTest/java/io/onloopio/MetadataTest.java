@@ -21,6 +21,32 @@ public final class MetadataTest extends InstrumentationTestCase {
     protected void tearDown() throws Exception { store.close(); super.tearDown(); }
     private Playlist playlist(String id,String name,int count) { return new Playlist(id,name,"revision",count,12); }
     private Song song(String id) { return new Song(id,id,"artist","album","mp3",4); }
+    public void testExistingReaderRemainsResponsiveDuringWrite()throws Exception{concurrentReader(false);}
+    public void testNewReaderRemainsResponsiveDuringWrite()throws Exception{concurrentReader(true);}
+    public void testClosingOneStorePreservesOthersAndIsolation() {
+        android.content.Context actual=getInstrumentation().getTargetContext();RenamingDelegatingContext same=new RenamingDelegatingContext(actual,"test_");same.makeExistingFilesAndDbsAccessible();MetadataStore second=new MetadataStore(same);
+        String prefix="pool_isolated_"+System.nanoTime()+"_";MetadataStore isolated=new MetadataStore(new RenamingDelegatingContext(actual,prefix));
+        try{
+            assertEquals(store.accountKey(),second.accountKey());assertNull(isolated.accountKey());isolated.selectAccount("other-account");assertFalse(store.accountKey().equals(isolated.accountKey()));
+            android.database.sqlite.SQLiteDatabase database=second.getWritableDatabase();database.beginTransaction();try{assertEquals(2L,android.database.DatabaseUtils.longForQuery(database,"PRAGMA synchronous",null));}finally{database.endTransaction();}
+            String account=second.accountKey();store.close();assertEquals(account,second.accountKey());assertEquals(account,store.accountKey());second.close();assertEquals(account,store.accountKey());
+        }finally{second.close();isolated.close();actual.deleteDatabase(prefix+"onloopio.db");}
+    }
+    private void concurrentReader(boolean openDuringWrite)throws Exception {
+        RenamingDelegatingContext same=new RenamingDelegatingContext(getInstrumentation().getTargetContext(),"test_");same.makeExistingFilesAndDbsAccessible();
+        final MetadataStore reader=new MetadataStore(same);if(!openDuringWrite)assertFalse(reader.catalogSynced());
+        final android.database.sqlite.SQLiteDatabase database=store.getWritableDatabase();
+        final java.util.concurrent.CountDownLatch writing=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1),read=new java.util.concurrent.CountDownLatch(1);
+        final Throwable[] errors=new Throwable[2];final boolean[] visible=new boolean[1];final long[] elapsed=new long[1];
+        Thread writer=new Thread(new Runnable(){public void run(){try{database.beginTransaction();try{database.execSQL("UPDATE server SET catalog_synced=1 WHERE id=1");writing.countDown();release.await();database.setTransactionSuccessful();}finally{database.endTransaction();}}catch(Throwable failure){errors[0]=failure;writing.countDown();}}},"OnLoopio-test-writer");
+        Thread reading=new Thread(new Runnable(){public void run(){long started=android.os.SystemClock.elapsedRealtime();try{visible[0]=reader.catalogSynced();reader.needsAudioIndex();reader.pendingDownloads();}catch(Throwable failure){errors[1]=failure;}finally{elapsed[0]=android.os.SystemClock.elapsedRealtime()-started;read.countDown();}}},"OnLoopio-test-reader");
+        boolean completed=false;
+        try{writer.start();assertTrue("Writer did not start",writing.await(5,java.util.concurrent.TimeUnit.SECONDS));assertNull(errors[0]);reading.start();completed=read.await(3500,java.util.concurrent.TimeUnit.MILLISECONDS);}
+        finally{release.countDown();writer.join(10000);reading.join(10000);reader.close();}
+        assertNull("Writer failed",errors[0]);assertTrue("Reader blocked behind the writer",completed);
+        assertNull("Reader failed: "+(errors[1]==null?"none":errors[1].getClass().getSimpleName()),errors[1]);assertTrue("Read waited for an unrelated writer",elapsed[0]<1000);assertFalse("Read observed an uncommitted write",visible[0]);
+        assertTrue("Committed write not visible",store.catalogSynced());
+    }
     public void testScalarDefaultsAndAudioIndexBackfill() {
         assertEquals(0,store.catalogCount());assertEquals(0,store.localCount());assertEquals(0,store.pendingDownloads());assertEquals(0,store.downloadCount(0));assertEquals(0,store.pinnedCount());
         assertEquals(0L,store.lastRefresh());assertEquals(0L,store.lastPlaylistCheck());assertEquals(0L,store.lastPlaylistAudit());

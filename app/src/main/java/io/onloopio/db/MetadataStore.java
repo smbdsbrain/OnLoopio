@@ -18,14 +18,43 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.HashMap;
+import java.util.Map;
 
 /** Playlist metadata and its deduplicated library. Audio files live separately on SD. */
 public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEngine.Repository {
-    public MetadataStore(Context context) { super(context, "onloopio.db", null, 9); }
+    private static final Map<String,SharedHelper> databases=new HashMap<String,SharedHelper>();
+    private final Context databaseContext;private final String databasePath;private SharedHelper shared;
+    public MetadataStore(Context context) {
+        super(context,"onloopio.db",null,9);
+        Context application=context.getApplicationContext();if(application==null)application=context;
+        databasePath=context.getDatabasePath("onloopio.db").getAbsolutePath();
+        // Preserve prefixed/custom database contexts used by isolated tests.
+        databaseContext=databasePath.equals(application.getDatabasePath("onloopio.db").getAbsolutePath())?application:context;
+    }
+    private static final class SharedHelper extends SQLiteOpenHelper {
+        int users;
+        SharedHelper(Context context){super(context,"onloopio.db",null,9);setWriteAheadLoggingEnabled(true);}
+        public void onConfigure(SQLiteDatabase db){db.execSQL("PRAGMA synchronous=FULL");}
+        public void onCreate(SQLiteDatabase db){createSchema(db);}
+        public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion){upgradeSchema(db,oldVersion,newVersion);}
+    }
+    private SharedHelper helper(){
+        if(shared==null)synchronized(databases){shared=databases.get(databasePath);if(shared==null){shared=new SharedHelper(databaseContext);databases.put(databasePath,shared);}shared.users++;}
+        return shared;
+    }
+    /** Components share one pool; WAL readers do not wait for a background writer. */
+    public synchronized SQLiteDatabase getReadableDatabase(){return helper().getReadableDatabase();}
+    public synchronized SQLiteDatabase getWritableDatabase(){return helper().getWritableDatabase();}
+    public synchronized void close(){
+        if(shared!=null)synchronized(databases){SharedHelper previous=shared;shared=null;if(--previous.users==0){databases.remove(databasePath);previous.close();}}
+        super.close();
+    }
     /** Scalar statements avoid a 2 MiB CursorWindow for each flag, count or ID. */
     private long scalar(String sql,String... args){return DatabaseUtils.longForQuery(getReadableDatabase(),sql,args);}
     private String scalarText(String sql,String... args){return DatabaseUtils.stringForQuery(getReadableDatabase(),sql,args);}
-    public void onCreate(SQLiteDatabase db) {
+    public void onCreate(SQLiteDatabase db){createSchema(db);}
+    private static void createSchema(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE server (id INTEGER PRIMARY KEY CHECK(id=1), account_key TEXT NOT NULL, last_successful_sync INTEGER NOT NULL DEFAULT 0, catalog_synced INTEGER NOT NULL DEFAULT 0, playlist_checked_at INTEGER NOT NULL DEFAULT 0, playlist_audited_at INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE TABLE playlist (id TEXT PRIMARY KEY, name TEXT NOT NULL, changed TEXT NOT NULL, song_count INTEGER NOT NULL, duration INTEGER NOT NULL, detail_cached INTEGER NOT NULL DEFAULT 0, offline_sync INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE TABLE song (id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL, album TEXT NOT NULL, suffix TEXT NOT NULL, duration INTEGER NOT NULL, album_id TEXT NOT NULL DEFAULT '', track INTEGER NOT NULL DEFAULT 0, artist_id TEXT NOT NULL DEFAULT '', genre TEXT NOT NULL DEFAULT '', disc INTEGER NOT NULL DEFAULT 0, in_catalog INTEGER NOT NULL DEFAULT 0, audio_name TEXT NOT NULL DEFAULT '', cover_art TEXT NOT NULL DEFAULT '')");
@@ -45,7 +74,8 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
     }
     private static void audioState(SQLiteDatabase db){db.execSQL("CREATE TABLE audio_state (song_id TEXT PRIMARY KEY, downloaded_at INTEGER NOT NULL DEFAULT 0, last_played INTEGER NOT NULL DEFAULT 0, play_count INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0)");}
     private static void localTable(SQLiteDatabase db){db.execSQL("CREATE TABLE local_song(id TEXT PRIMARY KEY,title TEXT NOT NULL,artist TEXT NOT NULL,album TEXT NOT NULL,suffix TEXT NOT NULL,duration INTEGER NOT NULL,album_id TEXT NOT NULL,track INTEGER NOT NULL,artist_id TEXT NOT NULL,genre TEXT NOT NULL,disc INTEGER NOT NULL,cover_art TEXT NOT NULL,path TEXT NOT NULL UNIQUE,bytes INTEGER NOT NULL,modified INTEGER NOT NULL)");}
-    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+    public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion){upgradeSchema(db,oldVersion,newVersion);}
+    private static void upgradeSchema(SQLiteDatabase db, int oldVersion, int newVersion) {
         if(oldVersion==1) { db.execSQL("ALTER TABLE song ADD COLUMN album_id TEXT NOT NULL DEFAULT ''"); db.execSQL("ALTER TABLE song ADD COLUMN track INTEGER NOT NULL DEFAULT 0"); oldVersion=2; }
         if(oldVersion==2 && newVersion>=3) {
             db.execSQL("ALTER TABLE song ADD COLUMN artist_id TEXT NOT NULL DEFAULT ''"); db.execSQL("ALTER TABLE song ADD COLUMN genre TEXT NOT NULL DEFAULT ''");
