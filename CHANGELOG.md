@@ -5,6 +5,7 @@
 - Fixed background HTTPS requests retaining sockets in Android 4.2's connection pool, eventually exhausting file descriptors and crashing SQLite reads when returning to the player.
 - Release active streaming connections when stopping the localhost audio proxy.
 - Use scalar SQLite statements for flags, counters and single IDs, avoiding unnecessary 2 MiB cursor windows on the Y1.
+- Share one SQLite connection pool per database and use WAL with full write synchronization so background updates do not block readers or fail when another component opens the database.
 - Obtain Wi-Fi managers from the application context so settings and sync services can be released on the legacy firmware.
 - Added explicit API-17 resource probes with a disposable keep-alive TLS fixture and an eight-hour background/resume endurance check.
 
