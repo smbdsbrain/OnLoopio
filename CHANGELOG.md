@@ -1,17 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
 
-- Add seven-day private partial expiration, measured artifact duration/file-average bitrate, and API17 ReplayGain with common 6 dB headroom.
-- Build separately signed candidate instrumentation in GitHub Actions for reversible long-file/focus and powered playback endurance checks.
-
-- Save playback queues, occurrence IDs, position and listen attempts; restore on pause after process or storage lifecycle changes.
-- Preserve a complete offline playlist while its replacement downloads, with durable publication recovery and protected cache references.
-- Separate feedback, playlist, catalog and download work; add history, held-event actions, bounded retry and battery/charging policies.
+- Save playback queues, repeat/shuffle order, position and listen attempts; restore the session paused after process or storage lifecycle changes.
+- Preserve a complete offline playlist while its replacement downloads, with recoverable file publication and protected cache references.
+- Separate feedback, playlist, catalog and download work; add listening history, held-event actions, bounded retries and battery/charging policies.
 - Preserve original listening timestamps with durable clock uncertainty markers and bound retries after clock rollback.
-- Add validated original Range resume and separate Compatible/Original/Compact artifacts.
-- Add opt-in attenuation-only ReplayGain and experimental WAV/FLAC prepared-next playback; qualification limits and reproduction steps are recorded in [reliability notes](docs/reliability.md).
-- Add API17 migration, large-queue, publication, lifecycle, TLS/Range and wired measurement fixtures. Release gates remain open.
+- Resume Original downloads with validated strong-ETag Range requests; keep separate Compatible/Original/Compact artifacts, show measured file-average bitrate and expire inactive private partials after seven days.
+- Add opt-in Track/Album ReplayGain with common 6 dB headroom and EQ/peak compensation. Positive gain is relative to that shared reserve and is limited to 6 dB; Off retains the original level.
+- Add experimental prepared-next playback for local/completed WAV and FLAC with Repeat Off and EQ off. It is disabled by default and falls back to sequential playback.
+- Validate API-17 migrations, large queues, publication recovery, TLS/Range, native playback/focus and navigation. The signed implementation passed a two-hour powered offline playback/focus/navigation run with cleanup and state restoration; wired WAV/FLAC boundary and gain measurements are documented in [reliability notes](https://github.com/smbdsbrain/OnLoopio/blob/v0.11.0/docs/reliability.md).
+
+### Qualification and upgrade limits
+
+- The Y1's native decoder can seek to an incorrect position in long FLAC files without a usable SEEKTABLE. Two-hour VBR MP3 and FLAC with seek points passed the middle/end seek and focus checks; user audio is not rewritten.
+- Gapless streaming, MP3 and Bluetooth are outside the qualified feature scope. Wired microphone measurements are reference projections, not calibrated analog gain guarantees.
+- Physical SD removal, USB ownership transitions, power loss, reboot/shutdown, Bluetooth and comparative battery tests were excluded from this release qualification. The two-hour powered offline run does not establish those properties or eight-hour endurance.
+- The main database upgrades additively from 9 to 20 and the audio ownership index from 1 to 2. Downgrading requires a matching private pre-upgrade backup; the newer databases must not be opened by an older APK.
+- Android 4.2.2/API 17, ARMv7, verified Y1 Type A, signing, TLS and public firmware security defaults are retained.
 
 ## 0.10.1
 
