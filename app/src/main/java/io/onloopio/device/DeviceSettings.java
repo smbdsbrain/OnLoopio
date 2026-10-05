@@ -13,9 +13,10 @@ import java.io.FileOutputStream;
 
 /** Device preferences are independent of the private Navidrome account and library. */
 public final class DeviceSettings {
+    public static volatile long lastActivity=SystemClock.elapsedRealtime();
     private final Context context;
     private final SharedPreferences prefs;
-    public DeviceSettings(Context context) { this.context=context.getApplicationContext(); prefs=this.context.getSharedPreferences("device",0); }
+    public DeviceSettings(Context context) { this.context=context.getApplicationContext(); prefs=this.context.getSharedPreferences("device",0);if(!prefs.contains("feedback_auto_sync"))prefs.edit().putBoolean("feedback_auto_sync",prefs.getBoolean("playlist_auto_sync",true)).commit(); }
     public boolean flag(String key,boolean fallback) { return prefs.getBoolean(key,fallback); }
     public int number(String key,int fallback) { return prefs.getInt(key,fallback); }
     public String text(String key,String fallback) { return prefs.getString(key,fallback); }

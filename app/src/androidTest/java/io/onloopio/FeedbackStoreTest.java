@@ -62,12 +62,12 @@ public final class FeedbackStoreTest extends InstrumentationTestCase {
             public List<Song> starred(){return Collections.singletonList(song("a"));}
         };
         assertFalse(new BacksyncEngine().check(store,"account",source).success());assertEquals(1,store.pendingFeedback("account"));assertTrue(store.isLiked("a"));
-        store.close();store=new MetadataStore(isolated);fail[0]=false;assertTrue(new BacksyncEngine().check(store,"account",source).success());assertEquals(0,store.pendingFeedback("account"));
+        store.close();store=new MetadataStore(isolated);fail[0]=false;assertEquals(0,store.pendingListens("account",10).size());assertEquals(1,store.pendingFeedback("account"));new io.onloopio.db.FeedbackStore(store).retry("account");assertTrue(new BacksyncEngine().check(store,"account",source).success());assertEquals(0,store.pendingFeedback("account"));
         new BacksyncEngine().check(store,"account",source);assertEquals(2,submissions[0]);
     }
     public void testV8MigrationPreservesMetadataQueueAndStatistics(){
         store.pin(Collections.singletonList("a"),true);store.listened("a",456);store.enqueueDownloads(Collections.singletonList("a"));
-        android.database.sqlite.SQLiteDatabase db=store.getWritableDatabase();db.execSQL("DROP TABLE track_like");db.execSQL("DROP TABLE listen_event");db.setVersion(8);store.close();store=new MetadataStore(isolated);
-        assertEquals(9,store.getReadableDatabase().getVersion());assertNotNull(store.song("a"));assertTrue(store.audioState("a").pinned);assertEquals(456L,store.audioState("a").lastPlayed);assertEquals(1,store.audioState("a").plays);assertEquals(1,store.pendingDownloads());assertEquals(0,store.pendingFeedback("account"));
+        android.database.sqlite.SQLiteDatabase db=store.getWritableDatabase();db.execSQL("DROP TABLE track_like");db.execSQL("DROP TABLE listen_event");for(String table:new String[]{"playback_session","queue_entry","attempt_ledger","offline_generation","offline_member","offline_pointer","listen_history","feedback_retry","audio_partial","replay_gain","audio_artifact","artifact_gain"})db.execSQL("DROP TABLE "+table);db.setVersion(8);store.close();store=new MetadataStore(isolated);
+        assertEquals(19,store.getReadableDatabase().getVersion());assertNotNull(store.song("a"));assertTrue(store.audioState("a").pinned);assertEquals(456L,store.audioState("a").lastPlayed);assertEquals(1,store.audioState("a").plays);assertEquals(1,store.pendingDownloads());assertEquals(0,store.pendingFeedback("account"));
     }
 }

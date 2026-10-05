@@ -38,6 +38,7 @@ public final class MenuNavigationTest extends InstrumentationTestCase {
     private final List<Song> songs=new ArrayList<Song>();private final List<Playlist> playlists=new ArrayList<Playlist>();
     private List<Song> playlistSongs;
     private Activity extra;
+    private io.onloopio.api.ServerConfig fixtureConfig;private File cachedFixture;private java.util.Map<String,?> fixtureServer;
     protected void setUp()throws Exception{
         super.setUp();context=getInstrumentation().getTargetContext();prefs=new DeviceSettings(context);
         restore=context.getSharedPreferences("navigation_test_restore",0);
@@ -48,9 +49,10 @@ public final class MenuNavigationTest extends InstrumentationTestCase {
     }
     private void prepare()throws Exception{
         prefs.setFlag("force_offline",true);prefs.setFlag("downloads_paused",true);prefs.setFlag("playlist_auto_sync",false);ControlLock.locked(context,false);
+        if("io.onloopio.validation".equals(context.getPackageName())){fixtureServer=new java.util.HashMap<String,Object>(context.getSharedPreferences("server",0).getAll());fixtureConfig=new io.onloopio.api.ServerConfig("https://fixture.invalid","fixture","fixture");new io.onloopio.config.ConfigStore(context).save(fixtureConfig);cachedFixture=new File(io.onloopio.library.MusicPaths.root(),"OnLoopio-navigation-"+System.nanoTime()+".wav");java.io.FileInputStream input=new java.io.FileInputStream("/data/local/tmp/onloopio-audio-fixture/reference.wav");java.io.FileOutputStream output=new java.io.FileOutputStream(cachedFixture);try{byte[] bytes=new byte[4096];int n;while((n=input.read(bytes))!=-1)output.write(bytes,0,n);}finally{input.close();output.close();}io.onloopio.library.AudioFileIndex index=new io.onloopio.library.AudioFileIndex(context);try{index.record(io.onloopio.model.CacheKey.hash(fixtureConfig.accountKey()),io.onloopio.model.CacheKey.audioName("navigation-cached"),cachedFixture.getCanonicalPath(),cachedFixture.length(),cachedFixture.lastModified());}finally{index.close();}}
         home=((OnLoopioTestRunner)getInstrumentation()).awaitHome();assertNotNull(home);
         originalStore=(MetadataStore)field(home,"store");AudioCache cache=new AudioCache(context,new io.onloopio.config.ConfigStore(context).load());Song saved=null;
-        for(Song song:originalStore.offlineSongs(cache.completedNames()))if(cache.contains(song)){saved=song;break;}assertNotNull("A cached track is required for offline playlist navigation",saved);
+        if(fixtureConfig!=null)saved=new Song("navigation-cached","Saved fixture","Synthetic","Fixture","wav",2);else for(Song song:originalStore.offlineSongs(cache.completedNames()))if(cache.contains(song)){saved=song;break;}assertNotNull("A cached track is required for offline playlist navigation",saved);
         playlistSongs=Arrays.asList(saved,saved,saved);
         for(String name:context.databaseList())if(name.matches("navigation_[0-9]+_onloopio\\.db"))assertTrue(context.deleteDatabase(name));
         storeContext=new RenamingDelegatingContext(context,"navigation_"+System.nanoTime()+"_");store=new MetadataStore(storeContext);store.selectAccount("navigation-fixture");
@@ -78,6 +80,7 @@ public final class MenuNavigationTest extends InstrumentationTestCase {
             getInstrumentation().runOnMainSync(new Runnable(){public void run(){try{if(extra!=null)extra.finish();if(originalStore!=null){set(home,"store",originalStore);home.openLibrary();}}catch(Exception e){throw new RuntimeException(e);}}});idle();
             if(store!=null){store.close();assertTrue(storeContext.deleteDatabase("onloopio.db"));}
             if(file!=null && file.exists()){for(File audio:file.listFiles()){assertEquals(file.getCanonicalPath(),audio.getParentFile().getCanonicalPath());assertTrue(audio.delete());}assertTrue(file.delete());}
+            if(fixtureConfig!=null){io.onloopio.library.AudioFileIndex index=new io.onloopio.library.AudioFileIndex(context);try{index.forget(io.onloopio.model.CacheKey.hash(fixtureConfig.accountKey()),io.onloopio.model.CacheKey.audioName("navigation-cached"));}finally{index.close();}if(cachedFixture!=null && cachedFixture.exists())assertTrue(cachedFixture.delete());android.content.SharedPreferences.Editor editor=context.getSharedPreferences("server",0).edit().clear();for(java.util.Map.Entry<String,?> e:fixtureServer.entrySet())editor.putString(e.getKey(),(String)e.getValue());assertTrue(editor.commit());}
         }finally{prefs.setFlag("force_offline",offline);prefs.setFlag("downloads_paused",paused);prefs.setFlag("playlist_auto_sync",automatic);ControlLock.locked(context,locked);assertTrue(restore.edit().clear().commit());}
     }
     private static Object field(Object object,String name)throws Exception{Field f=object.getClass().getDeclaredField(name);f.setAccessible(true);return f.get(object);}

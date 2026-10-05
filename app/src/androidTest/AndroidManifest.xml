@@ -6,4 +6,7 @@
     <instrumentation android:name="io.onloopio.UsbLibraryTest" android:targetPackage="io.onloopio" />
     <instrumentation android:name="io.onloopio.FeedbackDeviceProbe" android:targetPackage="io.onloopio" />
     <instrumentation android:name="io.onloopio.NetworkDeviceProbe" android:targetPackage="io.onloopio" />
+    <instrumentation android:name="io.onloopio.PlaybackLifecycleProbe" android:targetPackage="${testedPackage}" />
+    <instrumentation android:name="io.onloopio.AudioOutputProbe" android:targetPackage="${testedPackage}" />
+    <instrumentation android:name="io.onloopio.PipelineDeviceProbe" android:targetPackage="${testedPackage}" />
 </manifest>

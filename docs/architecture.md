@@ -7,3 +7,5 @@ The application uses a private settings store for Navidrome credentials and home
 MetadataStore keeps catalog, playlist, local-music and download state in SQLite. The UI stays usable offline with saved audio and local files. Playback uses Android MediaPlayer; online playback streams through a localhost proxy with a random in-memory token so native decoding does not receive server credentials. Audio is downloaded into temporary files and published to the cache only after validation.
 
 The release build validates upstream archive hashes, APK signature/API level, boot security settings, absence of a configuration seed and the final artifact checksums. See [build](build.md) and [firmware](firmware.md).
+
+Durable playback, generation/publication contracts, feedback delivery, energy policy and experimental audio gates are described in [reliability notes](reliability.md).

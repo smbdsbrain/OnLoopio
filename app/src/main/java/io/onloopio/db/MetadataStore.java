@@ -26,7 +26,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
     private static final Map<String,SharedHelper> databases=new HashMap<String,SharedHelper>();
     private final Context databaseContext;private final String databasePath;private SharedHelper shared;
     public MetadataStore(Context context) {
-        super(context,"onloopio.db",null,9);
+        super(context,"onloopio.db",null,19);
         Context application=context.getApplicationContext();if(application==null)application=context;
         databasePath=context.getDatabasePath("onloopio.db").getAbsolutePath();
         // Preserve prefixed/custom database contexts used by isolated tests.
@@ -34,7 +34,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
     }
     private static final class SharedHelper extends SQLiteOpenHelper {
         int users;
-        SharedHelper(Context context){super(context,"onloopio.db",null,9);setWriteAheadLoggingEnabled(true);}
+        SharedHelper(Context context){super(context,"onloopio.db",null,19);setWriteAheadLoggingEnabled(true);}
         public void onConfigure(SQLiteDatabase db){db.execSQL("PRAGMA synchronous=FULL");}
         public void onCreate(SQLiteDatabase db){createSchema(db);}
         public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion){upgradeSchema(db,oldVersion,newVersion);}
@@ -66,6 +66,17 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
         audioState(db);
         localTable(db);
         feedbackTables(db);
+        SessionStore.schema(db);
+        GenerationStore.schema(db);
+        FeedbackStore.schema(db);
+        PartialStore.schema(db);
+        GainStore.schema(db);
+        ArtifactStore.schema(db);
+        GenerationStore.summaries(db);
+        GainStore.variants(db);
+        GenerationStore.readinessIndex(db);
+        SessionStore.clocks(db);
+        FeedbackStore.clocks(db);
     }
     private static void feedbackTables(SQLiteDatabase db){
         db.execSQL("CREATE TABLE track_like(account_key TEXT NOT NULL,song_id TEXT NOT NULL,liked INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0,dirty INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_key,song_id))");
@@ -93,9 +104,20 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
         if(oldVersion==6 && newVersion>=7){db.execSQL("ALTER TABLE playlist ADD COLUMN offline_sync INTEGER NOT NULL DEFAULT 0");db.execSQL("ALTER TABLE server ADD COLUMN playlist_checked_at INTEGER NOT NULL DEFAULT 0");db.execSQL("ALTER TABLE server ADD COLUMN playlist_audited_at INTEGER NOT NULL DEFAULT 0");oldVersion=7;}
         if(oldVersion==7 && newVersion>=8){localTable(db);oldVersion=8;}
         if(oldVersion==8 && newVersion>=9){feedbackTables(db);oldVersion=9;}
+        if(oldVersion==9 && newVersion>=10){SessionStore.schema(db);oldVersion=10;}
+        if(oldVersion==10 && newVersion>=11){GenerationStore.schema(db);oldVersion=11;}
+        if(oldVersion==11 && newVersion>=12){FeedbackStore.schema(db);oldVersion=12;}
+        if(oldVersion==12 && newVersion>=13){PartialStore.schema(db);oldVersion=13;}
+        if(oldVersion==13 && newVersion>=14){GainStore.schema(db);oldVersion=14;}
+        if(oldVersion==14 && newVersion>=15){ArtifactStore.schema(db);oldVersion=15;}
+        if(oldVersion==15 && newVersion>=16){GenerationStore.summaries(db);oldVersion=16;}
+        if(oldVersion==16 && newVersion>=17){GainStore.variants(db);oldVersion=17;}
+        if(oldVersion==17 && newVersion>=18){GenerationStore.readinessIndex(db);oldVersion=18;}
+        if(oldVersion==18 && newVersion>=19){SessionStore.clocks(db);FeedbackStore.clocks(db);oldVersion=19;}
         if(oldVersion==newVersion)return;
         throw new IllegalStateException("No migration defined for database version " + oldVersion);
     }
+    public int offlineProfile(){return new io.onloopio.device.DeviceSettings(databaseContext).number("offline_profile",0);}
     public synchronized void selectAccount(String key) {
         SQLiteDatabase db = getWritableDatabase();
         String existing=accountKey();
@@ -126,15 +148,18 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
     public synchronized boolean hasCatalogSong(String id){return scalar("SELECT EXISTS(SELECT 1 FROM song WHERE id=? AND in_catalog=1)",id)!=0;}
     public synchronized void followPlaylist(String id,boolean follow){ContentValues v=new ContentValues();v.put("offline_sync",follow?1:0);getWritableDatabase().update("playlist",v,"id=?",new String[]{id});}
     public synchronized void stopFollowingPlaylists(){getWritableDatabase().execSQL("UPDATE playlist SET offline_sync=0");}
-    public synchronized boolean protectedFromCleanup(String id){return scalar("SELECT EXISTS(SELECT 1 FROM audio_state WHERE song_id=? AND pinned=1 UNION ALL SELECT 1 FROM playlist_song ps JOIN playlist p ON p.id=ps.playlist_id WHERE ps.song_id=? AND p.offline_sync=1)",id,id)!=0;}
+    public synchronized boolean protectedFromCleanup(String id){return scalar("SELECT EXISTS(SELECT 1 FROM audio_state WHERE song_id=? AND pinned=1 UNION ALL SELECT 1 FROM playlist_song ps JOIN playlist p ON p.id=ps.playlist_id WHERE ps.song_id=? AND p.offline_sync=1 UNION ALL SELECT 1 FROM offline_member m JOIN offline_generation g ON g.id=m.generation WHERE m.song_id=? AND g.account=(SELECT account_key FROM server WHERE id=1) UNION ALL SELECT 1 FROM queue_entry WHERE song_id=? AND account=(SELECT account_key FROM server WHERE id=1))",id,id,id,id)!=0;}
     /** Headers, ordered details, catalog (if fetched), queue additions and success stamp commit together. */
     public synchronized int applyPlaylistSync(String account,List<Playlist> headers,List<PlaylistDetail> details,Library catalog,List<String> completedNames,long now,boolean audit){
         SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
             if(!account.equals(accountKey()))throw new IllegalStateException("Account changed during synchronization");
+            // Upgrade legacy subscriptions using their old membership before new detail replaces it.
+            GenerationStore baseline=new GenerationStore(this);for(Playlist p:playlists())if(followsPlaylist(p.id)){GenerationStore.Summary status=baseline.summary(account,p.id);if(status.required==0 && status.stagingRequired==0){PlaylistDetail old=detail(p.id);if(old!=null)baseline.stage(account,old);}}baseline.reconcile(account,completedNames,now);
             replacePlaylists(headers);for(PlaylistDetail detail:details)saveDetail(detail);if(catalog!=null)replaceCatalog(catalog);
+            GenerationStore generations=new GenerationStore(this);for(Playlist p:headers)if(followsPlaylist(p.id)){PlaylistDetail d=detail(p.id);if(d!=null)generations.stage(account,d);}generations.reconcile(account,completedNames,now);
             Set<String> completed=new HashSet<String>(completedNames);List<String> missing=new ArrayList<String>();
             Cursor c=db.rawQuery("SELECT DISTINCT s.id,s.audio_name FROM playlist p JOIN playlist_song ps ON p.id=ps.playlist_id JOIN song s ON s.id=ps.song_id WHERE p.offline_sync=1",null);
-            try{while(c.moveToNext())if(!completed.contains(c.getString(1)))missing.add(c.getString(0));}finally{c.close();}
+            try{while(c.moveToNext())if(!completed.contains(io.onloopio.player.AudioProfile.token(c.getString(0),offlineProfile())))missing.add(c.getString(0));}finally{c.close();}
             int before=pendingDownloads();enqueueDownloads(missing);int added=pendingDownloads()-before;
             ContentValues v=new ContentValues();v.put("playlist_checked_at",now);if(audit)v.put("playlist_audited_at",now);db.update("server",v,"id=1",null);
             db.setTransactionSuccessful();return added;
@@ -173,14 +198,27 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
     }
     /** Indexed lookup of actual files, avoiding 9,000 SD stats or hashes on the UI thread. */
     public synchronized List<Song> offlineSongs(List<String> names){
-        List<Song> songs=new ArrayList<Song>();for(int offset=0;offset<names.size();offset+=400){int end=Math.min(names.size(),offset+400);StringBuilder sql=new StringBuilder("SELECT id,title,artist,album,suffix,duration,album_id,track,artist_id,genre,disc,cover_art FROM song WHERE audio_name IN (");String[] args=new String[end-offset];for(int n=offset;n<end;n++){if(n>offset)sql.append(',');sql.append('?');args[n-offset]=names.get(n);}sql.append(')');Cursor c=getReadableDatabase().rawQuery(sql.toString(),args);try{while(c.moveToNext())songs.add(readSong(c));}finally{c.close();}}
-        return songs;
+        List<Song> result=new ArrayList<Song>();Set<String> seen=new HashSet<String>();for(int offset=0;offset<names.size();offset+=200){int end=Math.min(names.size(),offset+200);StringBuilder placeholders=new StringBuilder();List<String> args=new ArrayList<String>();for(int n=offset;n<end;n++){if(n>offset)placeholders.append(',');placeholders.append('?');args.add(names.get(n));}List<String> both=new ArrayList<String>(args);both.addAll(args);both.add(accountKey());String sql="SELECT s.id,s.title,s.artist,s.album,s.suffix,s.duration,s.album_id,s.track,s.artist_id,s.genre,s.disc,s.cover_art FROM song s WHERE s.audio_name IN ("+placeholders+") OR s.id IN (SELECT song_id FROM audio_artifact WHERE token IN ("+placeholders+") AND account=?)";Cursor c=getReadableDatabase().rawQuery(sql,both.toArray(new String[0]));try{while(c.moveToNext()){Song song=readSong(c);if(seen.add(song.id))result.add(song);}}finally{c.close();}}
+        return result;
     }
     public synchronized Song song(String id) {
         if(id.startsWith("local:")){Cursor local=getReadableDatabase().rawQuery("SELECT id,title,artist,album,suffix,duration,album_id,track,artist_id,genre,disc,cover_art,path FROM local_song WHERE id=?",new String[]{id});try{return local.moveToFirst()?readSong(local,local.getString(12)):null;}finally{local.close();}}
         Cursor c=getReadableDatabase().rawQuery("SELECT id,title,artist,album,suffix,duration,album_id,track,artist_id,genre,disc,cover_art FROM song WHERE id=?",new String[]{id});
         try { return c.moveToFirst() ? readSong(c) : null; }
         finally { c.close(); }
+    }
+    /** Bounded lookup used by the background queue loader; duplicates keep their input positions. */
+    public synchronized List<Song> songsByIds(List<String> ids){
+        Map<String,Song> found=new HashMap<String,Song>();
+        for(int offset=0;offset<ids.size();offset+=200){
+            List<String> slice=ids.subList(offset,Math.min(offset+200,ids.size()));StringBuilder bind=new StringBuilder();
+            for(int n=0;n<slice.size();n++){if(n>0)bind.append(',');bind.append('?');}
+            for(boolean local:new boolean[]{false,true}){
+                Cursor c=getReadableDatabase().rawQuery("SELECT id,title,artist,album,suffix,duration,album_id,track,artist_id,genre,disc,cover_art"+(local?",path FROM local_song":" FROM song")+" WHERE id IN ("+bind+")",slice.toArray(new String[0]));
+                try{while(c.moveToNext()){Song song=local?readSong(c,c.getString(12)):readSong(c);found.put(song.id,song);}}finally{c.close();}
+            }
+        }
+        List<Song> result=new ArrayList<Song>();for(String id:ids)result.add(found.get(id));return result;
     }
     private static Song readSong(Cursor c) { return new Song(c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getString(4),c.getInt(5),c.getString(6),c.getInt(7),c.getString(8),c.getString(9),c.getInt(10),c.getString(11)); }
     private static Song readSong(Cursor c,String path){return new Song(c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getString(4),c.getInt(5),c.getString(6),c.getInt(7),c.getString(8),c.getString(9),c.getInt(10),c.getString(11),path);}
@@ -254,13 +292,23 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
     public synchronized void listened(String id,long when){ensureAudioState(id);getWritableDatabase().execSQL("UPDATE audio_state SET last_played=?,play_count=play_count+1 WHERE song_id=?",new Object[]{when,id});}
     /** Count and enqueue together. Local files never enter the server outbox. */
     public synchronized void recordListening(ListenEvent event,long qualifiedAt){
+        recordListening(event,qualifiedAt,true);
+    }
+    public synchronized void recordListening(ListenEvent event,long qualifiedAt,boolean clockUncertain){
         SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
+            ContentValues attempt=new ContentValues();attempt.put("attempt_id",event.sessionId);attempt.put("account",event.account==null?"":event.account);attempt.put("song_id",event.songId);attempt.put("started",event.time);attempt.put("policy",2);attempt.put("clock_uncertain",clockUncertain?1:0);
+            db.insertWithOnConflict("attempt_ledger",null,attempt,SQLiteDatabase.CONFLICT_IGNORE);
+            if(scalar("SELECT qualified_at FROM attempt_ledger WHERE attempt_id=?",event.sessionId)>0)return;
             if(!event.songId.startsWith("local:")){
-                if(event.account==null || !event.account.equals(accountKey()))return;
+                if(event.account==null || event.account.length()==0)return;
                 ContentValues v=new ContentValues();v.put("session_id",event.sessionId);v.put("account_key",event.account);v.put("song_id",event.songId);v.put("listened_at",event.time);
                 if(db.insertWithOnConflict("listen_event",null,v,SQLiteDatabase.CONFLICT_IGNORE)==-1)return;
             }
-            listened(event.songId,qualifiedAt);db.setTransactionSuccessful();
+            db.execSQL("UPDATE attempt_ledger SET qualified_at=?,clock_uncertain=MAX(clock_uncertain,?) WHERE attempt_id=?",new Object[]{qualifiedAt,clockUncertain?1:0,event.sessionId});
+            Song metadata=song(event.songId);db.execSQL("INSERT OR IGNORE INTO listen_history(attempt_id,account,song_id,title,artist,started,clock_uncertain) VALUES(?,?,?,?,?,?,?)",new Object[]{event.sessionId,event.account==null?"":event.account,event.songId,metadata==null?event.songId:metadata.title,metadata==null?"":metadata.artist,event.time,clockUncertain?1:0});
+            if(DatabaseUtils.longForQuery(db,"SELECT changes()",null)!=0)new FeedbackStore(this).prune(System.currentTimeMillis());
+            db.execSQL("UPDATE listen_history SET qualified=1,clock_uncertain=MAX(clock_uncertain,?) WHERE attempt_id=?",new Object[]{clockUncertain?1:0,event.sessionId});
+            if(event.songId.startsWith("local:") || event.account.equals(accountKey()))listened(event.songId,qualifiedAt);db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
     private String likeAccount(String id){String key=id.startsWith("local:")?"":accountKey();return key==null?"":key;}
@@ -291,21 +339,24 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
         return (int)scalar("SELECT (SELECT COUNT(*) FROM track_like WHERE account_key=? AND dirty=1)+(SELECT COUNT(*) FROM listen_event WHERE account_key=?)",account,account);
     }
     public synchronized List<LikeChange> pendingLikes(String account,int limit){
-        List<LikeChange> result=new ArrayList<LikeChange>();Cursor c=getReadableDatabase().rawQuery("SELECT song_id,liked,revision FROM track_like WHERE account_key=? AND dirty=1 ORDER BY song_id LIMIT ?",new String[]{account,Integer.toString(limit)});
+        long now=System.currentTimeMillis();List<LikeChange> result=new ArrayList<LikeChange>();Cursor c=getReadableDatabase().rawQuery("SELECT l.song_id,l.liked,l.revision FROM track_like l LEFT JOIN feedback_retry r ON r.account=l.account_key AND r.kind='like' AND r.item=l.song_id AND r.revision=l.revision WHERE l.account_key=? AND l.dirty=1 AND (r.item IS NULL OR ((r.next_at<=? OR r.attempted_at>? OR r.next_at>?) AND r.state IN ('pending','transient'))) ORDER BY l.song_id LIMIT ?",new String[]{account,Long.toString(now),Long.toString(now),Long.toString(now+3615000),Integer.toString(Math.min(1000,limit))});
         try{while(c.moveToNext())result.add(new LikeChange(account,c.getString(0),c.getInt(1)!=0,c.getLong(2)));}finally{c.close();}return result;
     }
     public synchronized void acknowledgeLike(LikeChange change){
         ContentValues v=new ContentValues();v.put("dirty",0);getWritableDatabase().update("track_like",v,"account_key=? AND song_id=? AND revision=?",new String[]{change.account,change.songId,Long.toString(change.revision)});
+        new FeedbackStore(this).acknowledge(change.account,"like",change.songId);
     }
     public synchronized List<ListenEvent> pendingListens(String account,int limit){
-        List<ListenEvent> result=new ArrayList<ListenEvent>();Cursor c=getReadableDatabase().rawQuery("SELECT session_id,song_id,listened_at FROM listen_event WHERE account_key=? ORDER BY listened_at,session_id LIMIT ?",new String[]{account,Integer.toString(limit)});
+        long now=System.currentTimeMillis();List<ListenEvent> result=new ArrayList<ListenEvent>();Cursor c=getReadableDatabase().rawQuery("SELECT e.session_id,e.song_id,e.listened_at FROM listen_event e LEFT JOIN feedback_retry r ON r.account=e.account_key AND r.kind='listen' AND r.item=e.session_id WHERE e.account_key=? AND (r.item IS NULL OR ((r.next_at<=? OR r.attempted_at>? OR r.next_at>?) AND r.state IN ('pending','transient'))) ORDER BY e.listened_at,e.session_id LIMIT ?",new String[]{account,Long.toString(now),Long.toString(now),Long.toString(now+3615000),Integer.toString(Math.min(1000,limit))});
         try{while(c.moveToNext())result.add(new ListenEvent(c.getString(0),account,c.getString(1),c.getLong(2)));}finally{c.close();}return result;
     }
     public synchronized void acknowledgeListens(List<ListenEvent> events){
         SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
-            for(ListenEvent event:events)db.delete("listen_event","account_key=? AND session_id=?",new String[]{event.account,event.sessionId});db.setTransactionSuccessful();
+            for(ListenEvent event:events){db.delete("listen_event","account_key=? AND session_id=?",new String[]{event.account,event.sessionId});new FeedbackStore(this).acknowledge(event.account,"listen",event.sessionId);}db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
+    public synchronized void failedLike(LikeChange change,java.io.IOException error){new FeedbackStore(this).failure(change.account,"like",change.songId,change.revision,error,System.currentTimeMillis());}
+    public synchronized void failedListen(ListenEvent event,java.io.IOException error){new FeedbackStore(this).failure(event.account,"listen",event.sessionId,0,error,System.currentTimeMillis());}
     /** Only a complete remote snapshot clears clean likes. Offline edits retain priority. */
     public synchronized void applyStarredSnapshot(String account,List<Song> songs){
         SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
@@ -339,7 +390,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
             Cursor c = db.rawQuery("SELECT id FROM playlist", null);
             List<String> removed = new ArrayList<String>();
             try { while(c.moveToNext()) if (!retained.contains(c.getString(0))) removed.add(c.getString(0)); } finally { c.close(); }
-            for (String id : removed) { db.delete("playlist_song", "playlist_id=?", new String[]{id}); db.delete("playlist", "id=?", new String[]{id}); }
+            for (String id : removed) {new GenerationStore(this).detached(accountKey(),id);if(new GenerationStore(this).active(accountKey(),id)==null){db.delete("playlist_song", "playlist_id=?", new String[]{id}); db.delete("playlist", "id=?", new String[]{id});}}
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
     }

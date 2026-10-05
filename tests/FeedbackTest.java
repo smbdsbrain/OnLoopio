@@ -17,19 +17,19 @@ public final class FeedbackTest {
         listening();gestures();backsync();System.out.println("Feedback checks passed: "+checks);
     }
     private static void listening(){
-        ListeningSession session=new ListeningSession();session.baseline(0,0);
+        ListeningSession session=new ListeningSession();session.restore(0,false,1);session.baseline(0,0);
         check(!session.sample(29000,29000,120000,true),"Before 30-second threshold");
         check(session.sample(30000,30000,120000,true),"30-second threshold");
         check(!session.sample(50000,50000,120000,true),"One listen per session");
-        session.reset();session.baseline(0,0);check(session.sample(5000,5000,10000,true),"Half of a short track");
-        session.reset();session.baseline(0,0);check(!session.sample(500,500,500,true),"Minimum one second");
-        session.reset();session.baseline(0,0);check(!session.sample(29999,29999,0,true),"Unknown duration uses 30 seconds");check(session.sample(30000,30000,0,true),"Unknown duration threshold");
-        session.reset();session.baseline(0,0);session.sample(5000,5000,120000,true);
+        session.restore(0,false,1);session.baseline(0,0);check(session.sample(5000,5000,10000,true),"Half of a short track");
+        session.restore(0,false,1);session.baseline(0,0);check(!session.sample(500,500,500,true),"Minimum one second");
+        session.restore(0,false,1);session.baseline(0,0);check(!session.sample(29999,29999,0,true),"Unknown duration uses 30 seconds");check(session.sample(30000,30000,0,true),"Unknown duration threshold");
+        session.restore(0,false,1);session.baseline(0,0);session.sample(5000,5000,120000,true);
         session.sample(25000,5000,120000,false);check(session.playedMillis()==5000,"Pause excluded");
         session.baseline(25000,100000);check(!session.sample(30000,105000,120000,true) && session.playedMillis()==10000,"Seek excluded by new baseline");
         session.sample(60000,105000,120000,true);check(session.playedMillis()==10000,"Buffering with stalled position excluded");
         session.sample(80000,125000,120000,true);check(session.playedMillis()==30000,"Real progress accumulates across resume");
-        session.reset();session.baseline(80000,0);check(!session.sample(81000,1000,120000,true),"Repeat starts a fresh session");
+        session.restore(0,false,1);session.baseline(80000,0);check(!session.sample(81000,1000,120000,true),"Repeat starts a fresh session");
     }
     private static int tap(PlayGesture gesture,long at,String context){gesture.key(true,false,0,at,at,context,false);return gesture.key(false,false,0,at,at+10,context,false);}
     private static void gestures(){
@@ -63,11 +63,11 @@ public final class FeedbackTest {
     private static Store store(int count){Store store=new Store();store.likes.add(new LikeChange("account","s",true,1));for(int n=0;n<count;n++)store.listens.add(new ListenEvent("session"+n,"account","s",1000+n));return store;}
     private static void backsync()throws Exception{
         BacksyncEngine engine=new BacksyncEngine();Store store=store(60);Source source=new Source();BacksyncEngine.Result result=engine.check(store,"account",source);
-        check(result.success() && result.listens==60 && result.likes==1 && source.submissions==3,"All feedback sent in batches");check(store.likes.isEmpty() && store.listens.isEmpty() && store.snapshots==1,"Confirmed feedback removed");
+        check(result.success() && result.listens==60 && result.likes==1 && source.submissions==60,"All feedback sent in batches");check(store.likes.isEmpty() && store.listens.isEmpty() && store.snapshots==1,"Confirmed feedback removed");
         source.submissions=0;engine.check(store,"account",source);check(source.submissions==0 && source.stars==1,"Confirmed events not sent twice");
         store=store(60);source=new Source();source.failLike=true;source.failListen=true;result=engine.check(store,"account",source);
-        check(result.likesFailed && result.listensFailed && store.likes.size()==1 && store.listens.size()==35,"Failed requests kept, confirmed batch removed");check(store.snapshots==1,"Upload errors do not block remote likes");
-        source.failLike=false;source.failListen=false;result=engine.check(store,"account",source);check(result.success() && result.listens==35 && store.listens.isEmpty(),"Retry sends only unconfirmed listens");
+        check(result.likesFailed && result.listensFailed && store.likes.size()==1 && store.listens.size()==1,"Failed requests kept, confirmed batch removed");check(store.snapshots==1,"Upload errors do not block remote likes");
+        source.failLike=false;source.failListen=false;result=engine.check(store,"account",source);check(result.success() && result.listens==1 && store.listens.isEmpty(),"Retry sends only unconfirmed listens");
         source.failStarred=true;result=engine.check(store,"account",source);check(result.starredFailed && store.snapshots==2,"Failed starred fetch preserves snapshot");
         store=store(1);source=new Source();source.canceled=true;try{engine.check(store,"account",source);throw new AssertionError("Guard ignored");}catch(IOException expected){checks++;}
         check(store.likes.size()==1 && store.listens.size()==1 && store.snapshots==0,"Account/network guard leaves outbox intact");

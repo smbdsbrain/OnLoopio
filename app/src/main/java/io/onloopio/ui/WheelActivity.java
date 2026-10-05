@@ -35,6 +35,7 @@ abstract class WheelActivity extends Activity {
     DeviceSettings prefs;
     private CenterGesture center;private Menu centerMenu;private Item centerItem;
     abstract Menu rootMenu();
+    public void onUserInteraction(){super.onUserInteraction();io.onloopio.device.IdleScheduler.activity(this);}
     public void onCreate(Bundle state) {
         super.onCreate(state); prefs=new DeviceSettings(this); stack.add(rootMenu());
         center=new CenterGesture(this,new android.os.Handler(),new CenterGesture.Listener(){

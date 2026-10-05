@@ -9,5 +9,6 @@ public final class OnLoopioApplication extends Application {
         settings.wheelLocked(settings.flag("key_lock",true));
         io.onloopio.sync.SyncScheduler.ensure(this,false);
         io.onloopio.library.MusicLibraryService.request(this,false);
+        io.onloopio.player.PlaybackService.action(this,io.onloopio.player.PlaybackService.KICK);
     }
 }

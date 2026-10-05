@@ -72,7 +72,7 @@ public final class PlaylistActivity extends Activity {
     private List<Song> contextTracks=new ArrayList<Song>();private String contextTitle,contextPlaylistId;private int previousScreen;
     private String contextSongId,contextAccount,menuSongId,menuAccount;private int contextLikeIndex=-1,playerLikeIndex=-1;private java.util.Set<String> likedIds=Collections.emptySet();
     private final BroadcastReceiver feedbackUpdated=new BroadcastReceiver(){public void onReceive(Context c,Intent i){render(true);}};
-    private final BroadcastReceiver synchronizedPlaylists=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(!i.getBooleanExtra("reachable",i.getBooleanExtra("success",false)))online.failed();if(current!=null){detail=store.detail(current.id);if(detail==null){current=null;if(screen==DETAIL)screen=PLAYLISTS;}else current=detail.playlist;}if(screen!=CONTEXT)render(true);}};
+    private final BroadcastReceiver synchronizedPlaylists=new BroadcastReceiver(){public void onReceive(Context c,Intent i){if(!i.getBooleanExtra("reachable",i.getBooleanExtra("success",false)))online.failed();if(current!=null){detail=displayDetail(current.id);if(detail==null){current=null;if(screen==DETAIL)screen=PLAYLISTS;}else current=detail.playlist;}if(screen!=CONTEXT)render(true);}};
     private NowPlayingView playerView;private final ExecutorService coversWorker=Executors.newSingleThreadExecutor();private String artworkKey;private int artworkRequest;private Bitmap currentCover,nextCover;
     private Runnable pendingTap; private int lastTapPosition=-1; private long lastTapAt;
     private CenterGesture center;private WheelTurnGuard wheelGuard;private boolean wheelSeeking;private int centerScreen,centerPosition;private String centerRow;
@@ -107,7 +107,7 @@ public final class PlaylistActivity extends Activity {
         });
         list.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {public boolean onItemLongClick(AdapterView<?> p,View v,int pos,long id){if(!ControlLock.locked(PlaylistActivity.this))openContext(pos);return true;}});
     }
-    protected void onResume() {super.onResume();foreground=this;registerReceiver(synchronizedPlaylists,new IntentFilter(PlaylistSyncService.UPDATED));registerReceiver(feedbackUpdated,new IntentFilter(PlaylistSyncService.FEEDBACK_UPDATED));registerReceiver(localUpdated,new IntentFilter(io.onloopio.library.MusicLibraryService.UPDATED));io.onloopio.library.MusicLibraryService.request(this,false);importControls();rememberSelection();if(ControlLock.locked(this))screen=PLAYER;createPage();loadConfiguration(false);if(current!=null){detail=store.detail(current.id);if(detail==null){current=null;if(screen==DETAIL)screen=PLAYLISTS;}else current=detail.playlist;}if(config!=null && online.homeWifi() && !settings.flag("force_offline",false) && !online.online() && pending==null)checkMode();render(true);main.post(tick);}
+    protected void onResume() {super.onResume();foreground=this;registerReceiver(synchronizedPlaylists,new IntentFilter(PlaylistSyncService.UPDATED));registerReceiver(feedbackUpdated,new IntentFilter(PlaylistSyncService.FEEDBACK_UPDATED));registerReceiver(localUpdated,new IntentFilter(io.onloopio.library.MusicLibraryService.UPDATED));io.onloopio.library.MusicLibraryService.request(this,false);importControls();rememberSelection();if(ControlLock.locked(this))screen=PLAYER;createPage();loadConfiguration(false);if(current!=null){detail=displayDetail(current.id);if(detail==null){current=null;if(screen==DETAIL)screen=PLAYLISTS;}else current=detail.playlist;}if(config!=null && online.homeWifi() && !settings.flag("force_offline",false) && !online.online() && pending==null)checkMode();render(true);main.post(tick);}
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
         center.cancel();wheelGuard.reset();cancelTap();
@@ -144,17 +144,17 @@ public final class PlaylistActivity extends Activity {
     private String trackLabel(Song song) {
         String label=song.title;
         if(settings.flag("file_extensions",false) && song.suffix.length()>0 && !label.endsWith("."+song.suffix)) label+="."+song.suffix;
-        return (likedIds.contains(song.id)?"♥ ":"")+(!offline() && (song.local() || audioCache!=null && audioCache.contains(song))?"✓ ":"")+label+(song.artist.length()==0?"":"\n"+song.artist);
+        return (likedIds.contains(song.id)?"♥ ":"")+(!offline() && (song.local() || audioCache!=null && audioCache.available(song))?"✓ ":"")+label+(song.artist.length()==0?"":"\n"+song.artist);
     }
     private boolean offline() { return !online.online(); }
     private boolean availableOnly(){return offline();}
     private List<Song> library() {
         List<Song> all=availableOnly()?(audioCache==null?new ArrayList<Song>():store.offlineSongs(audioCache.completedNames())):store.catalogSongs();List<Song> result=new ArrayList<Song>();
-        for(Song s:all)if(!availableOnly() || audioCache!=null && audioCache.contains(s))result.add(s);result.addAll(store.localSongs());return result;
+        for(Song s:all)if(!availableOnly() || audioCache!=null && audioCache.available(s))result.add(s);result.addAll(store.localSongs());return result;
     }
     private List<Song> selectionSource(String artist,String album,String genre){if(availableOnly() || !store.catalogSynced())return library();List<Song> source=store.catalogTracks(artist,album,genre);source.addAll(store.localSongs());return source;}
     private List<Song> playable(List<Song> source) {
-        if(!offline()) return source; List<Song> result=new ArrayList<Song>();for(Song s:source)if(s.local() && new java.io.File(s.localPath).isFile() || audioCache!=null && audioCache.contains(s))result.add(s);return result;
+        if(!offline()) return source; List<Song> result=new ArrayList<Song>();for(Song s:source)if(s.local() && new java.io.File(s.localPath).isFile() || audioCache!=null && audioCache.available(s))result.add(s);return result;
     }
     private java.util.Set<String> artistAlbums(String key) {
         java.util.Set<String> result=new java.util.HashSet<String>();if(key!=null)for(Library.Entity entity:store.albums())if(key.equals("id:"+entity.artistId))result.add("id:"+entity.id);return result;
@@ -184,7 +184,7 @@ public final class PlaylistActivity extends Activity {
             status.setText(Ui.deviceInfo(this)+" · "+(offline()?"OFFLINE":"ONLINE")+" · "+(offline()?library().size():store.catalogCount()+store.localCount())+" tracks");
         } else if(screen==PLAYLISTS) {
             title.setText("Playlists"); playlists=config==null?new ArrayList<Playlist>():store.playlists();
-            if(offline()) { List<Playlist> available=new ArrayList<Playlist>(); for(Playlist p:playlists) {PlaylistDetail d=store.detail(p.id); if(d!=null && !playable(d.songs).isEmpty()) available.add(p);} playlists=available; }
+            if(offline()) { List<Playlist> available=new ArrayList<Playlist>(); for(Playlist p:playlists) {PlaylistDetail d=displayDetail(p.id); if(d!=null && !playable(d.songs).isEmpty()) available.add(p);} playlists=available; }
             for(Playlist p:playlists) labels.add((store.followsPlaylist(p.id)?"✓ ":"")+p.name+"   "+p.songCount);
             labels.add("Sync playlist metadata"); labels.add("Back to main menu");
             status.setText(playlists.size()+" playlists · "+(offline()?"offline":"online"));
@@ -192,7 +192,7 @@ public final class PlaylistActivity extends Activity {
             title.setText(current.name); tracks=detail==null?new ArrayList<Song>():playable(detail.songs);
             for(Song song:tracks) labels.add(trackLabel(song));
             labels.add("Keep playlist offline"); labels.add("Refresh this playlist"); labels.add("Back to playlists");
-            status.setText(tracks.size()+" tracks · ✓ saved audio");
+            status.setText(screen==DETAIL && current!=null?offlineStatus(current.id):tracks.size()+" tracks · ✓ saved audio");
         } else if(screen==ARTISTS || screen==ALBUMS) {
             List<Song> songs=(!availableOnly() && store.catalogSynced())?store.localSongs():library();TreeSet<String> unique=new TreeSet<String>();albumNames.clear();artistNames.clear();artistNameByKey.clear();artistKeyByName.clear();albumKeyByName.clear();java.util.Set<String> owned=artistAlbums(artistKey);
             if(!availableOnly())for(Library.Entity entity:store.albums())registerAlbumName(entity.artist,entity.name,"id:"+entity.id);
@@ -220,9 +220,9 @@ public final class PlaylistActivity extends Activity {
             for(Song song:source)if(screen==FAVORITES || (album!=null || byArtist(song,artistKey,owned)) && byAlbum(song,album) && (genre==null || genre.equals(song.genre)))tracks.add(song);
             if(album!=null) albumOrder(tracks);else Collections.sort(tracks,new Comparator<Song>(){public int compare(Song a,Song b){return compareNames(a.title,b.title);}});
             title.setText(screen==FAVORITES?"Favorite tracks":album!=null?(tracks.isEmpty()?"Album":tracks.get(0).album):artist!=null?artist:genre!=null?genre:"Tracks");
-            for(Song song:tracks) labels.add(trackLabel(song)); labels.add("Back"); status.setText(tracks.size()+" tracks · ✓ saved audio");
+            for(Song song:tracks) labels.add(trackLabel(song)); labels.add("Back"); status.setText(screen==DETAIL && current!=null?offlineStatus(current.id):tracks.size()+" tracks · ✓ saved audio");
         } else if(screen==PLAYER_MENU) {
-            title.setText("Player menu");Collections.addAll(labels,"Library","Download queue","Settings","Power off","Previous","Next","Download this track","Protect from cleanup","Allow rotation");
+            title.setText("Player menu");Collections.addAll(labels,"Library","Download queue","Settings","Power off","Previous","Next","Download this track","Protect from cleanup","Allow rotation","Playback queue");
             Song playing=PlaybackService.state.song;menuSongId=playing==null?null:playing.id;menuAccount=store.accountKey();playerLikeIndex=-1;
             if(menuSongId!=null){playerLikeIndex=labels.size();labels.add(store.isLiked(menuSongId)?"Remove like":"Like");}labels.add("Back");status.setText("Center: open · Back: return to music");
         } else if(screen==POWER_CONFIRM) {
@@ -273,8 +273,9 @@ public final class PlaylistActivity extends Activity {
             else if(position==3) PlaybackService.entityAction(this,PlaybackService.ENQUEUE,contextTracks);
             else if(position==4){if(contextPlaylistId!=null)store.followPlaylist(contextPlaylistId,false);PlaybackService.entityAction(this,PlaybackService.REMOVE,contextTracks);}
             else if(position==6 || position==7){List<String> ids=new ArrayList<String>();for(Song s:contextTracks)ids.add(s.id);store.pin(ids,position==6);status.setText(position==6?"Protected from automatic cleanup":"Eligible for rotation");return;}
-            else {int saved=0;for(Song s:contextTracks) if(s.local() && new java.io.File(s.localPath).isFile() || audioCache!=null && audioCache.contains(s)) saved++;
-                Song first=contextTracks.get(0);status.setText(contextTitle+"\n"+contextTracks.size()+" tracks · "+saved+" offline"+(contextTracks.size()==1?"\n"+first.artist+" · "+first.album+" · "+first.suffix+" · "+time(first.duration*1000)+(first.local()?"\n"+first.localPath:""):""));return;}
+            else {int saved=0;for(Song s:contextTracks) if(s.local() && new java.io.File(s.localPath).isFile() || audioCache!=null && audioCache.available(s)) saved++;
+                Song first=contextTracks.get(0);String variants="";if(contextTracks.size()==1 && !first.local()){variants="\n"+Ui.label(this,"Requested audio profile")+": "+Ui.label(this,new String[]{"Compatible","Original","Compact"}[Math.max(0,Math.min(2,settings.number("offline_profile",0)))]);if(audioCache!=null){java.util.Set<String> ready=new java.util.HashSet<String>();for(AudioCache.Artifact artifact:audioCache.artifacts(first.id))ready.add(artifact.token);for(io.onloopio.db.ArtifactStore.Row variant:new io.onloopio.db.ArtifactStore(store).rows(store.accountKey(),first.id))if(ready.contains(variant.token))variants+="\n"+Ui.label(this,"Saved audio")+": "+Ui.label(this,new String[]{"Compatible","Original","Compact"}[Math.max(0,Math.min(2,variant.profile))])+" · "+variant.actual+" · "+variant.bytes/1024+" KiB";}}
+                status.setText(contextTitle+"\n"+contextTracks.size()+" tracks · "+saved+" offline"+(contextTracks.size()==1?"\n"+first.artist+" · "+first.album+" · "+first.suffix+" · "+time(first.duration*1000)+(first.local()?"\n"+first.localPath:""):"")+variants);return;}
             if(screen==CONTEXT)closeContext();else render(false);return;
         }
         if(screen==HOME) {
@@ -286,7 +287,7 @@ public final class PlaylistActivity extends Activity {
             else if(position==5) screen=PLAYER;else if(position==7){artist=null;artistKey=null;album=null;genre=null;screen=FAVORITES;}else { settings(); return; }
         } else if(screen==PLAYLISTS) {
             if(position<playlists.size()) {
-                current=playlists.get(position); detail=store.detail(current.id); screen=DETAIL; render(false);
+                current=playlists.get(position); detail=displayDetail(current.id); screen=DETAIL; render(false);
                 if(detail==null && !offline()) refresh(true); return;
             } else if(position==playlists.size()) { refresh(false); return; } else {onBackPressed();return;}
         } else if(screen==DETAIL) {
@@ -314,12 +315,15 @@ public final class PlaylistActivity extends Activity {
             else if(position==4 || position==5){PlaybackService.action(this,position==4?PlaybackService.PREVIOUS:PlaybackService.NEXT);screen=PLAYER;}
             else if(position==6){if(PlaybackService.state.song!=null)PlaybackService.entityAction(this,PlaybackService.ENQUEUE,Collections.singletonList(PlaybackService.state.song));startActivity(new Intent(this,DownloadsActivity.class));return;}
             else if(position==7 || position==8){if(PlaybackService.state.song!=null)store.pin(Collections.singletonList(PlaybackService.state.song.id),position==7);screen=PLAYER;}
+            else if(position==9){startActivity(new Intent(this,PlaybackQueueActivity.class));return;}
             else screen=PLAYER;
         }
         render(false);
     }
     private void settings() { startActivity(new Intent(this,SettingsActivity.class)); }
     private void like(String account,String id){if(id==null || ControlLock.locked(this))return;try{boolean liked=store.toggleLike(account,id);android.widget.Toast.makeText(this,Ui.label(this,liked?"Liked":"Like removed"),android.widget.Toast.LENGTH_SHORT).show();PlaylistSyncService.feedbackChanged(this);}catch(IllegalStateException changed){status.setText("Account changed");}}
+    private String offlineStatus(String id){io.onloopio.db.GenerationStore.Summary summary=new io.onloopio.db.GenerationStore(store).summary(store.accountKey(),id);if(summary.active || summary.staging)return OfflineStatus.label(this,summary);PlaylistDetail source=store.detail(id);int ready=0;if(source!=null && audioCache!=null)for(Song s:source.songs)if(audioCache.available(s))ready++;return Ui.label(this,"Saved audio")+": "+ready+"/"+(source==null?0:source.songs.size())+" · "+Ui.label(this,"Cached metadata");}
+    private PlaylistDetail displayDetail(String id){if(offline()){PlaylistDetail active=new io.onloopio.db.GenerationStore(store).active(store.accountKey(),id);if(active!=null)return active;}return store.detail(id);}
     private void keepOffline(String id,List<Song> songs){store.followPlaylist(id,true);if(!songs.isEmpty())PlaybackService.entityAction(this,PlaybackService.ENQUEUE,songs);PlaylistSyncService.request(this,"manual",false,id);}
     private void cancelTap() {if(pendingTap!=null) main.removeCallbacks(pendingTap);pendingTap=null;lastTapPosition=-1;}
     private void tapped(final int position) {
@@ -332,7 +336,7 @@ public final class PlaylistActivity extends Activity {
     }
     private List<Song> entityTracks(int position) {
         List<Song> selected=new ArrayList<Song>();List<Song> all=null;
-        if(screen==PLAYLISTS && position<playlists.size()) {PlaylistDetail d=store.detail(playlists.get(position).id);return d==null?selected:playable(d.songs);}
+        if(screen==PLAYLISTS && position<playlists.size()) {PlaylistDetail d=displayDetail(playlists.get(position).id);return d==null?selected:playable(d.songs);}
         if(screen==DETAIL && position<tracks.size()) {selected.add(tracks.get(position));return selected;}
         if(screen==ARTISTS && position<groups.size()){String key=groups.get(position);all=selectionSource(key,null,null);java.util.Set<String> owned=artistAlbums(key);for(Song song:all)if(byArtist(song,key,owned))selected.add(song);albumOrder(selected);return selected;}
         if(screen==ALBUMS && position<groups.size()){String key=groups.get(position);all=selectionSource(null,key,null);for(Song song:all)if(byAlbum(song,key))selected.add(song);albumOrder(selected);return selected;}
@@ -418,6 +422,7 @@ public final class PlaylistActivity extends Activity {
         return super.dispatchKeyEvent(event);
     }
     public void openLibrary(){if(ControlLock.locked(this))return;center.cancel();screen=HOME;render(false);}
+    public void onUserInteraction(){super.onUserInteraction();io.onloopio.device.IdleScheduler.activity(this);}
     private void playerMenu(){cancelTap();wheelGuard.reset();screen=PLAYER_MENU;render(false);}
     private String wheelContext(){if(!wheelSeeking)return "volume";PlaybackService.State state=PlaybackService.state;return state.song==null?null:state.song.id+":"+state.queuePosition;}
     private void importControls(){if(io.onloopio.device.ControlConfigStore.importPrivateFile(this)){center.cancel();wheelGuard=new WheelTurnGuard(settings.number("wheel_steps_per_turn",WheelTurnGuard.DEFAULT_STEPS_PER_TURN));}}

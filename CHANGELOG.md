@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Save playback queues, occurrence IDs, position and listen attempts; restore on pause after process or storage lifecycle changes.
+- Preserve a complete offline playlist while its replacement downloads, with durable publication recovery and protected cache references.
+- Separate feedback, playlist, catalog and download work; add history, held-event actions, bounded retry and battery/charging policies.
+- Preserve original listening timestamps with durable clock uncertainty markers and bound retries after clock rollback.
+- Add validated original Range resume and separate Compatible/Original/Compact artifacts.
+- Add opt-in attenuation-only ReplayGain and experimental WAV/FLAC prepared-next playback; qualification limits and reproduction steps are recorded in [reliability notes](docs/reliability.md).
+- Add API17 migration, large-queue, publication, lifecycle, TLS/Range and wired measurement fixtures. Release gates remain open.
+
 ## 0.10.1
 
 - Fixed background HTTPS requests retaining sockets in Android 4.2's connection pool, eventually exhausting file descriptors and crashing SQLite reads when returning to the player.

@@ -25,6 +25,9 @@ import io.onloopio.api.ServerConfig;
 
 /** Loopback TLS fixture. Keys are generated outside Git and supplied only to the explicit probe. */
 final class TlsKeepAliveFixture {
+    interface Handler {Reply respond(String path,java.util.Map<String,String> headers)throws Exception;}
+    static final class Reply {final int status;final String type,headers;final byte[] body;Reply(int status,String type,String headers,byte[] body){this.status=status;this.type=type;this.headers=headers;this.body=body;}}
+    volatile Handler handler;
     private final SSLServerSocket server;
     private final Set<Socket> clients=new HashSet<Socket>();
     private final Thread acceptor;
@@ -55,9 +58,10 @@ final class TlsKeepAliveFixture {
     private void respond(Socket socket){try{
         socket.setSoTimeout(30000);BufferedReader input=new BufferedReader(new InputStreamReader(socket.getInputStream(),"ISO-8859-1"));OutputStream output=socket.getOutputStream();
         String request;while(!closed && (request=input.readLine())!=null){
-            String line;boolean close=false;while((line=input.readLine())!=null && line.length()>0)if("connection: close".equalsIgnoreCase(line.trim()))close=true;
+            String line;boolean close=false;java.util.Map<String,String> headers=new java.util.HashMap<String,String>();while((line=input.readLine())!=null && line.length()>0){int colon=line.indexOf(':');if(colon>0)headers.put(line.substring(0,colon).toLowerCase(java.util.Locale.US),line.substring(colon+1).trim());if("connection: close".equalsIgnoreCase(line.trim()))close=true;}
             requests++;if(close)closeRequests++;
             String path=request.split(" ")[1];boolean error=path.contains("id=error"),truncated=path.contains("id=truncated"),slow=path.contains("id=slow");
+            Reply reply=handler==null?null:handler.respond(path,headers);if(reply!=null){output.write(("HTTP/1.1 "+reply.status+" Fixture\r\nContent-Type: "+reply.type+"\r\nContent-Length: "+reply.body.length+"\r\n"+reply.headers+"Connection: close\r\n\r\n").getBytes("ISO-8859-1"));output.write(reply.body);output.flush();return;}
             boolean binary=path.contains("/download.view") || path.contains("/stream.view") || path.contains("/getCoverArt.view");
             byte[] body=binary?new byte[slow?32768:64]:"<subsonic-response status='ok' version='1.16.1'/>".getBytes("UTF-8");
             long length=slow?4*1024*1024:body.length+(truncated?32:0);
