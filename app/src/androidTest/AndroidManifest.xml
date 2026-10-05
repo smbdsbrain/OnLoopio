@@ -9,4 +9,5 @@
     <instrumentation android:name="io.onloopio.PlaybackLifecycleProbe" android:targetPackage="${testedPackage}" />
     <instrumentation android:name="io.onloopio.AudioOutputProbe" android:targetPackage="${testedPackage}" />
     <instrumentation android:name="io.onloopio.PipelineDeviceProbe" android:targetPackage="${testedPackage}" />
+    <instrumentation android:name="io.onloopio.PlaybackAcceptanceProbe" android:targetPackage="${testedPackage}" />
 </manifest>

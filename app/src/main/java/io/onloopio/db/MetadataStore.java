@@ -34,7 +34,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
     }
     private static final class SharedHelper extends SQLiteOpenHelper {
         int users;
-        SharedHelper(Context context){super(context,"onloopio.db",null,19);setWriteAheadLoggingEnabled(true);}
+        SharedHelper(Context context){super(context,"onloopio.db",null,20);setWriteAheadLoggingEnabled(true);}
         public void onConfigure(SQLiteDatabase db){db.execSQL("PRAGMA synchronous=FULL");}
         public void onCreate(SQLiteDatabase db){createSchema(db);}
         public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion){upgradeSchema(db,oldVersion,newVersion);}
@@ -77,6 +77,8 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
         GenerationStore.readinessIndex(db);
         SessionStore.clocks(db);
         FeedbackStore.clocks(db);
+        PartialStore.aging(db);
+        ArtifactStore.measurements(db);
     }
     private static void feedbackTables(SQLiteDatabase db){
         db.execSQL("CREATE TABLE track_like(account_key TEXT NOT NULL,song_id TEXT NOT NULL,liked INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0,dirty INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_key,song_id))");
@@ -114,6 +116,7 @@ public final class MetadataStore extends SQLiteOpenHelper implements BacksyncEng
         if(oldVersion==16 && newVersion>=17){GainStore.variants(db);oldVersion=17;}
         if(oldVersion==17 && newVersion>=18){GenerationStore.readinessIndex(db);oldVersion=18;}
         if(oldVersion==18 && newVersion>=19){SessionStore.clocks(db);FeedbackStore.clocks(db);oldVersion=19;}
+        if(oldVersion==19 && newVersion>=20){PartialStore.aging(db);ArtifactStore.measurements(db);oldVersion=20;}
         if(oldVersion==newVersion)return;
         throw new IllegalStateException("No migration defined for database version " + oldVersion);
     }

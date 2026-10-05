@@ -47,7 +47,7 @@ public final class AudioCache {
         context=c.getApplicationContext();File external=c.getExternalFilesDir(null);if(external==null)throw new IOException("Insert an SD card for offline music.");
         profile=new io.onloopio.device.DeviceSettings(c).number("offline_profile",0);account=CacheKey.hash(config.accountKey());root=MusicPaths.root();legacy=new File(new File(external,"audio"),account);staging=new File(new File(external,"downloads"),account);
         if(!root.isDirectory() && !root.mkdirs())throw new IOException("Music storage unavailable (USB storage mode?).");
-        if(!legacy.isDirectory() && !legacy.mkdirs())throw new IOException("Legacy storage unavailable");synchronized(AudioFileIndex.IO){AudioFileIndex index=new AudioFileIndex(context);try{index.recover(account,root,staging);}finally{index.close();}}refresh();
+        if(!legacy.isDirectory() && !legacy.mkdirs())throw new IOException("Legacy storage unavailable");synchronized(AudioFileIndex.IO){AudioFileIndex index=new AudioFileIndex(context);try{index.recover(account,root,staging);}finally{index.close();}}cleanupPartials(System.currentTimeMillis());refresh();
     }
     public File directory(){return root;}
     public int profile(){return profile;}
@@ -75,6 +75,7 @@ public final class AudioCache {
     public synchronized long completedBytes(){long total=0;for(File file:paths.values())total+=file.length();return total;}
     public long bytes(){return completedBytes();}
     public long partialBytes(){long bytes=0;File[] files=staging.listFiles();if(files!=null)for(File file:files)if(file.getName().matches("[0-9a-f]{64}\\.audio\\.part") && file.isFile())bytes+=file.length();return bytes;}
+    public int cleanupPartials(long now)throws IOException{synchronized(AudioFileIndex.IO){if(transfers.get()!=0)return 0;AudioFileIndex registry=new AudioFileIndex(context);io.onloopio.db.MetadataStore metadata=new io.onloopio.db.MetadataStore(context);try{return PartialCleanup.sweep(staging,account,new io.onloopio.db.PartialStore(metadata),registry.publishing(account),now);}finally{metadata.close();registry.close();}}}
     public void discardPartial(String id)throws IOException{for(int profile=0;profile<3;profile++){String token=AudioProfile.token(id,profile);File file=new File(staging,token+".part");if(file.isFile() && !file.delete())throw new IOException("Cannot remove partial download");io.onloopio.db.MetadataStore metadata=new io.onloopio.db.MetadataStore(context);try{new io.onloopio.db.PartialStore(metadata).clear(account,token);}finally{metadata.close();}}}
     public boolean remove(String id)throws IOException {return removeToken(AudioProfile.token(id,profile));}
     public static final class Artifact{public final String token;public final File file;Artifact(String t,File f){token=t;file=f;}}
@@ -122,7 +123,7 @@ public final class AudioCache {
     private File obtain(final Song song,NavidromeClient client,final NavidromeClient.DownloadProgress listener,boolean mp3)throws IOException {
         if(song.local())return new File(song.localPath);refresh();if(contains(song))return file(song.id);
         if(!staging.isDirectory() && !staging.mkdirs())throw new IOException("Cannot stage music download");final String token=AudioProfile.token(song.id,profile);File partial=new File(staging,token+".part");
-        transfers.incrementAndGet();try{
+        synchronized(AudioFileIndex.IO){transfers.incrementAndGet();}try{
             NavidromeClient.DownloadProgress progress=new NavidromeClient.DownloadProgress(){long lastCheck;public void bytes(long received,long total)throws IOException{if(received-lastCheck>=1024*1024 || lastCheck==0){lastCheck=received;if(freeBytes()<16L*1024*1024)throw new IOException("Not enough SD card space.");}if(listener!=null)listener.bytes(received,total);}};
             if(mp3 && profile!=AudioProfile.COMPACT)client.downloadMp3(song.id,partial,512L*1024*1024,progress);
             else {final io.onloopio.db.MetadataStore metadata=new io.onloopio.db.MetadataStore(context);try{final io.onloopio.db.PartialStore journal=new io.onloopio.db.PartialStore(metadata);io.onloopio.api.ResumableDownload.State state=journal.load(account,token);client.downloadVariant(song.id,profile,partial,512L*1024*1024,state,new io.onloopio.api.ResumableDownload.Journal(){public void save(io.onloopio.api.ResumableDownload.State state){journal.save(account,token,state);}},progress);}finally{metadata.close();}}

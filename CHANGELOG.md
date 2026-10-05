@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add seven-day private partial expiration, measured artifact duration/file-average bitrate, and API17 ReplayGain with common 6 dB headroom.
+- Build separately signed candidate instrumentation in GitHub Actions for reversible long-file/focus and powered playback endurance checks.
+
 - Save playback queues, occurrence IDs, position and listen attempts; restore on pause after process or storage lifecycle changes.
 - Preserve a complete offline playlist while its replacement downloads, with durable publication recovery and protected cache references.
 - Separate feedback, playlist, catalog and download work; add history, held-event actions, bounded retry and battery/charging policies.

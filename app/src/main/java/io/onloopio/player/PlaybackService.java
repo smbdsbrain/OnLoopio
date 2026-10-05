@@ -381,7 +381,7 @@ public final class PlaybackService extends Service implements AudioManager.OnAud
                         if(request!=downloadGeneration || !config.accountKey().equals(store.accountKey()) || cache.profile()!=store.offlineProfile() || io.onloopio.sync.WorkGate.reason(PlaybackService.this,io.onloopio.sync.WorkPolicy.Work.DOWNLOAD,false).length()>0)break;
                         store.downloadProgress(id,saved.length(),saved.length());store.downloaded(id,System.currentTimeMillis());store.completedDownload(id);completed++;io.onloopio.device.IdleScheduler.activity(PlaybackService.this);
                         new io.onloopio.db.GenerationStore(store).reconcile(config.accountKey(),cache.completedNames(),System.currentTimeMillis());
-                        new io.onloopio.db.ArtifactStore(store).record(config.accountKey(),entry,cache.profile(),AudioCache.audioExtension(saved,entry.suffix),saved.length());
+                        new io.onloopio.db.ArtifactStore(store).record(config.accountKey(),entry,cache.profile(),saved);
                         try{ReplayGain gain=client.replayGain(entry.id);io.onloopio.db.GainStore gains=new io.onloopio.db.GainStore(store);gains.save(config.accountKey(),entry.id,gain);gains.saveArtifact(config.accountKey(),AudioProfile.token(entry.id,cache.profile()),saved,gain,AudioCache.normalizedSource(PlaybackService.this,config.accountKey(),entry,saved));}catch(IOException optionalGain){}
                         if(destroyed || request!=downloadGeneration || !config.accountKey().equals(store.accountKey()) || io.onloopio.sync.WorkGate.reason(PlaybackService.this,io.onloopio.sync.WorkPolicy.Work.DOWNLOAD,false).length()>0)break;
                         downloads=new DownloadState(null,0,-1,0,"Loading cover");

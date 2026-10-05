@@ -23,3 +23,5 @@ The optional `native` operation waits for screen-off and two native Play key pre
 The snapshot ZIP contains private application data and must stay outside Git. If vendor storage permissions prevent pulling it directly, `export` writes only to an existing empty `/data/local/tmp/onloopio-feedback-device.zip` prepared by ADB. Mode `622` lets the application write while only the shell owner can read. Change it to `600` before pulling, then remove that temporary file; `restore` also removes the probe's private state and original ZIP.
 
 Development-only reliability tests, disposable package setup and wired capture limitations are documented in [reliability notes](reliability.md). The audio analysis scripts require NumPy and SciPy; FFmpeg supplies optional lossless/encoder-padding fixtures.
+
+Workflow-dispatched candidates also retain a separately signed instrumentation APK for explicit device qualification. This APK is absent from firmware and tag releases; uninstall it after tests. See [candidate acceptance](reliability.md#signed-candidate-acceptance) for backup, long-file/focus and powered playback endurance procedures.

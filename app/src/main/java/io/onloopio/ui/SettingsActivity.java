@@ -62,7 +62,7 @@ public final class SettingsActivity extends WheelActivity {
             r.add(row("Listening history",new Runnable(){public void run(){startActivity(new Intent(SettingsActivity.this,HistoryActivity.class));}}));
             r.add(row("Repeat: "+REPEAT[Math.max(0,Math.min(2,prefs.number("repeat",0)))],new Runnable(){ public void run(){ choose("Repeat",REPEAT,prefs.number("repeat",0),new Choice(){ public void apply(int n){ prefs.setNumber("repeat",n); changed(); }}); }}));
             r.add(row("Equalizer",new Runnable(){ public void run(){ equalizerMenu(); }}));
-            r.add(row("ReplayGain",new Runnable(){public void run(){choose("ReplayGain",new String[]{"Off","Track (attenuation)","Album (attenuation)"},prefs.number("replay_gain",0),new Choice(){public void apply(int n){prefs.setNumber("replay_gain",n);changed();}});}}));
+            r.add(row("ReplayGain",new Runnable(){public void run(){choose("ReplayGain",new String[]{"Off","Track (6 dB headroom)","Album (6 dB headroom)"},prefs.number("replay_gain",0),new Choice(){public void apply(int n){prefs.setNumber("replay_gain",n);changed();}});}}));
             r.add(toggle("Experimental local gapless","gapless_experimental",false));
             r.add(row("Offline audio profile",new Runnable(){public void run(){choose("Offline audio profile",new String[]{"Compatible","Original","Compact"},prefs.number("offline_profile",0),new Choice(){public void apply(int n){prefs.setNumber("offline_profile",n);PlaylistSyncService.request(SettingsActivity.this,"manual",false,null);changed();}});}}));
             r.add(toggle("File extensions","file_extensions",false)); r.add(toggle("Battery percentage","battery_percentage",true));
