@@ -24,6 +24,9 @@
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <application android:name=".OnLoopioApplication" android:label="OnLoopio" android:icon="@drawable/icon" android:theme="@android:style/Theme.Holo.NoActionBar"
         android:allowBackup="false">
+        <activity android:name=".ui.PlaybackQueueActivity" android:exported="false" />
+        <activity android:name=".ui.FeedbackActivity" android:exported="false" />
+        <activity android:name=".ui.HistoryActivity" android:exported="false" />
         <activity android:name=".ui.DownloadsActivity" android:exported="false" />
         <activity android:name=".ui.CacheSettingsActivity" android:exported="false" />
         <activity android:name=".ui.SyncSettingsActivity" android:exported="false" />
@@ -43,6 +46,7 @@
         <service android:name=".player.PlaybackService" android:exported="false" />
         <service android:name=".sync.PlaylistSyncService" android:exported="false" />
         <service android:name=".library.MusicLibraryService" android:exported="false" />
+        <receiver android:name=".device.IdleReceiver" android:exported="false" />
         <receiver android:name=".library.MusicMountReceiver" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
             <intent-filter>

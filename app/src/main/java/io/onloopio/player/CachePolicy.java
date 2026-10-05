@@ -19,7 +19,7 @@ public final class CachePolicy {
     private final DeviceSettings settings;private final MetadataStore store;private final AudioCache cache;
     public CachePolicy(Context c,MetadataStore store,AudioCache cache){this.settings=new DeviceSettings(c);this.store=store;this.cache=cache;}
     public static final class Result {public int removed;public long freed;public boolean blocked;}
-    private static final class Candidate {final Song song;final File file;final long used;Candidate(Song s,File f,long u){song=s;file=f;used=u;}}
+    private static final class Candidate {final Song song;final File file;final String token;final long used;Candidate(Song s,AudioCache.Artifact f,long u){song=s;file=f.file;token=f.token;used=u;}}
     public long limit(){int mb=settings.number("cache_limit_mb",DEFAULT_LIMIT_MB);return mb<=0?Long.MAX_VALUE:mb*MIB;}
     public long reserve(){return Math.max(16,settings.number("cache_reserve_mb",DEFAULT_RESERVE_MB))*MIB;}
     public Result clean(Set<String> playback,long incoming,long now,boolean manual)throws IOException {
@@ -27,23 +27,22 @@ public final class CachePolicy {
     }
     public Result preview(Set<String> playback,long now)throws IOException{return run(playback,0,0,now,true,false);}
     private Result run(Set<String> playback,long incoming,long diskNeeded,long now,boolean manual,boolean execute)throws IOException {
-        Result result=new Result();long bytes=cache.completedBytes(),free=cache.freeBytes();boolean automatic=settings.flag("cache_auto_clean",false);
-        if(!automatic && !manual){result.blocked=bytes+incoming>limit() || free-diskNeeded<reserve();return result;}
+        Result result=new Result();long bytes=cache.completedBytes()+cache.partialBytes(),free=cache.freeBytes();boolean automatic=settings.flag("cache_auto_clean",false);
+        if(!automatic && !manual){result.blocked=bytes>limit() || incoming>limit()-bytes || free-diskNeeded<reserve();return result;}
         Set<String> queued=store.queuedIds();List<Candidate> candidates=new ArrayList<Candidate>();
         int days=settings.number("cache_max_idle_days",90);long cutoff=days>0?now-days*86400000L:Long.MIN_VALUE;
         for(Song song:store.offlineSongs(cache.completedNames())){
-            File file=cache.file(song.id);MetadataStore.AudioState state=store.audioState(song.id);
-            if(state.downloaded==0){store.downloaded(song.id,file.lastModified());state=store.audioState(song.id);}
+            MetadataStore.AudioState state=store.audioState(song.id);
             if(store.protectedFromCleanup(song.id) || playback.contains(song.id) || queued.contains(song.id))continue;
-            candidates.add(new Candidate(song,file,Math.max(state.lastPlayed,state.downloaded)));
+            for(AudioCache.Artifact artifact:cache.artifacts(song.id)){long downloaded=state.downloaded>0?state.downloaded:artifact.file.lastModified();candidates.add(new Candidate(song,artifact,Math.max(state.lastPlayed,downloaded)));}
         }
         Collections.sort(candidates,new Comparator<Candidate>(){public int compare(Candidate a,Candidate b){return a.used<b.used?-1:a.used==b.used?a.song.id.compareTo(b.song.id):1;}});
         for(Candidate c:candidates){
             if(PlaybackService.protectedTracks.contains(c.song.id) || store.protectedFromCleanup(c.song.id))continue;
-            if(c.used>=cutoff && bytes+incoming<=limit() && free-diskNeeded>=reserve())continue;
-            long size=c.file.length();if(!execute || cache.remove(c.song.id)){bytes-=size;free+=size;result.freed+=size;result.removed++;}
+            if(c.used>=cutoff && bytes<=limit() && incoming<=limit()-bytes && free-diskNeeded>=reserve())continue;
+            long size=c.file.length();if(!execute || cache.removeArtifact(c.token)){bytes-=size;free+=size;result.freed+=size;result.removed++;}
         }
-        result.blocked=bytes+incoming>limit() || free-diskNeeded<reserve();return result;
+        result.blocked=bytes>limit() || incoming>limit()-bytes || free-diskNeeded<reserve();return result;
     }
-    public void requireSpace(Set<String> playback,long incoming,long received)throws IOException {Result result=run(playback,incoming,Math.max(0,incoming-received),System.currentTimeMillis(),false,true);if(result.blocked)throw new IOException("Cache limit / protected tracks / SD reserve");}
+    public void requireSpace(Set<String> playback,long incoming,long received)throws IOException {long remaining=Math.max(0,incoming-received),unaccounted=Math.max(0,received-cache.partialBytes());Result result=run(playback,remaining+unaccounted,remaining,System.currentTimeMillis(),false,true);if(result.blocked)throw new IOException("Cache limit / protected tracks / SD reserve");}
 }

@@ -11,6 +11,7 @@ android {
         versionName '0.10.1'
         testInstrumentationRunner 'io.onloopio.OnLoopioTestRunner'
         testApplicationId 'io.onloopio.tests'
+        manifestPlaceholders = [testedPackage: 'io.onloopio']
         ndk { abiFilters 'armeabi-v7a' }
     }
     compileOptions {
@@ -32,3 +33,13 @@ dependencies {
         "${android.sdkDirectory}/platforms/android-${android.compileSdk}/optional/android.test.runner.jar",
         "${android.sdkDirectory}/platforms/android-${android.compileSdk}/optional/android.test.mock.jar")
 }
+// Opt-in disposable package for synthetic Type A validation; never a release artifact.
+if (project.hasProperty('validationOnly')) {
+    android.defaultConfig.applicationId 'io.onloopio.validation'
+    android.defaultConfig.testApplicationId 'io.onloopio.validation.tests'
+    android.defaultConfig.manifestPlaceholders.testedPackage = 'io.onloopio.validation'
+    android.sourceSets.debug.manifest.srcFile 'src/validation/AndroidManifest.xml'
+}
+
+// Windows and CI must interpret localized source text identically.
+tasks.withType(JavaCompile).configureEach { options.encoding = "UTF-8" }

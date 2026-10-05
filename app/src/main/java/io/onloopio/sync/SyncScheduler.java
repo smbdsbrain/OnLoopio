@@ -15,12 +15,12 @@ public final class SyncScheduler {
     public static void ensure(Context c,boolean reset){
         DeviceSettings settings=new DeviceSettings(c);int minutes=settings.number("sync_interval_minutes",DEFAULT_MINUTES);
         AlarmManager manager=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);PendingIntent pending=alarm(c);
-        if(!settings.flag("playlist_auto_sync",true) || minutes<=0){manager.cancel(pending);return;}
+        if(!(settings.flag("playlist_auto_sync",true) || settings.flag("feedback_auto_sync",true)) || minutes<=0){manager.cancel(pending);return;}
         minutes=Math.max(5,Math.min(1440,minutes));SharedPreferences state=c.getSharedPreferences("sync_schedule",0);long now=android.os.SystemClock.elapsedRealtime();
         long at=state.getLong("alarm_at_elapsed",0);if(reset || state.getInt("minutes",0)!=minutes || at==0)at=now+minutes*60000L;
         // Skip missed checks after downtime; do not produce a burst of stale alarms.
         if(at<=now)at+=((now-at)/(minutes*60000L)+1)*minutes*60000L;
         state.edit().putLong("alarm_at_elapsed",at).putInt("minutes",minutes).commit();
-        manager.setRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,at,minutes*60000L,pending);
+        manager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,at,pending);
     }
 }

@@ -21,16 +21,36 @@ import java.util.HashSet;
 public final class AudioCache {
     private static final java.util.concurrent.atomic.AtomicInteger transfers=new java.util.concurrent.atomic.AtomicInteger();
     public static int activeTransfers(){return transfers.get();}
-    private final Context context;private final File root,legacy,staging;private final String account;
+    public static String tokenAt(Context c,String owner,File file)throws IOException{AudioFileIndex registry=new AudioFileIndex(c);try{AudioFileIndex.Entry e=registry.atPath(CacheKey.hash(owner),file.getCanonicalPath());return e==null?null:e.token;}finally{registry.close();}}
+    /** Transcoded/unknown representations must never receive a second normalization pass. */
+    public static boolean normalizedSource(Context c,String owner,Song song,File file)throws IOException{
+        if("ogg".equals(audioExtension(file,song.suffix)))return true;
+        AudioFileIndex registry=new AudioFileIndex(c);
+        try{AudioFileIndex.Entry e=registry.atPath(CacheKey.hash(owner),file.getCanonicalPath());if(e!=null){
+            if(e.token.equals(AudioProfile.token(song.id,AudioProfile.ORIGINAL)))return false;
+            if(e.token.equals(AudioProfile.token(song.id,AudioProfile.COMPACT)))return true;
+            return !originalSupported(song) || !audioExtension(file,song.suffix).equalsIgnoreCase(song.suffix);
+        }}finally{registry.close();}
+        return !originalSupported(song);
+    }
+    /** Saved account identity permits offline playback even when configuration is temporarily absent. */
+    public static File savedFile(Context c,String owner,Song song)throws IOException{
+        if(owner==null || owner.length()==0)return null;String account=CacheKey.hash(owner);int preferred=new io.onloopio.device.DeviceSettings(c).number("offline_profile",0);AudioFileIndex registry=new AudioFileIndex(c);
+        try{for(int profile:new int[]{preferred,0,1,2}){AudioFileIndex.Entry e=registry.find(account,AudioProfile.token(song.id,profile));if(e!=null){File f=new File(e.path);String base=MusicPaths.root().getCanonicalPath()+File.separator;if(f.getCanonicalPath().startsWith(base) && e.matches(f))return f;}}}
+        finally{registry.close();}
+        File external=c.getExternalFilesDir(null);if(external==null)return null;File legacy=new File(new File(new File(external,"audio"),account),CacheKey.audioName(song.id));return legacy.isFile() && legacy.length()>=16?legacy:null;
+    }
+    private final Context context;private final File root,legacy,staging;private final String account;private final int profile;
     private final Set<String> completed=new HashSet<String>();private final Map<String,File> paths=new HashMap<String,File>();
     private long refreshedAt;
     public AudioCache(Context c,ServerConfig config)throws IOException {
         context=c.getApplicationContext();File external=c.getExternalFilesDir(null);if(external==null)throw new IOException("Insert an SD card for offline music.");
-        account=CacheKey.hash(config.accountKey());root=MusicPaths.root();legacy=new File(new File(external,"audio"),account);staging=new File(new File(external,"downloads"),account);
+        profile=new io.onloopio.device.DeviceSettings(c).number("offline_profile",0);account=CacheKey.hash(config.accountKey());root=MusicPaths.root();legacy=new File(new File(external,"audio"),account);staging=new File(new File(external,"downloads"),account);
         if(!root.isDirectory() && !root.mkdirs())throw new IOException("Music storage unavailable (USB storage mode?).");
-        if(!legacy.isDirectory() && !legacy.mkdirs())throw new IOException("Legacy storage unavailable");refresh();
+        if(!legacy.isDirectory() && !legacy.mkdirs())throw new IOException("Legacy storage unavailable");synchronized(AudioFileIndex.IO){AudioFileIndex index=new AudioFileIndex(context);try{index.recover(account,root,staging);}finally{index.close();}}cleanupPartials(System.currentTimeMillis());refresh();
     }
     public File directory(){return root;}
+    public int profile(){return profile;}
     public File legacyDirectory(){return legacy;}
     public List<String> legacyNames(){List<String> names=new java.util.ArrayList<String>();File[] files=legacy.listFiles();if(files!=null)for(File f:files)if(f.isFile() && f.length()>=16 && f.getName().matches("[0-9a-f]{64}\\.audio"))names.add(f.getName());return names;}
     public synchronized List<String> completedNames(){return new java.util.ArrayList<String>(completed);}
@@ -44,16 +64,23 @@ public final class AudioCache {
     }
     public synchronized void refreshIfStale(){if(android.os.SystemClock.uptimeMillis()-refreshedAt>=2500)refresh();}
     private String relative(File file)throws IOException {String base=root.getCanonicalPath()+File.separator,path=file.getCanonicalPath();if(!path.startsWith(base))throw new IOException("File outside Music");return path.substring(base.length());}
-    public synchronized File file(String id)throws IOException {String token=CacheKey.audioName(id);File found=paths.get(token);return found!=null?found:new File(legacy,token);}
-    public synchronized boolean contains(String id){return completed.contains(CacheKey.audioName(id));}
+    public synchronized File file(String id)throws IOException {String token=AudioProfile.token(id,profile);File found=paths.get(token);return found!=null?found:new File(legacy,token);}
+    public synchronized boolean contains(String id){return completed.contains(AudioProfile.token(id,profile));}
+    public synchronized boolean available(Song song){if(song.local())return new File(song.localPath).isFile();for(int p=0;p<3;p++)if(completed.contains(AudioProfile.token(song.id,p)))return true;return false;}
     public boolean contains(Song song){
         if(song.local())return new File(song.localPath).isFile();
-        if(!contains(song.id))return false;if(originalSupported(song))return true;
+        if(!contains(song.id))return false;if(profile==AudioProfile.ORIGINAL || originalSupported(song))return true;
         try{return mp3File(file(song.id));}catch(IOException bad){return false;}
     }
     public synchronized long completedBytes(){long total=0;for(File file:paths.values())total+=file.length();return total;}
     public long bytes(){return completedBytes();}
-    public boolean remove(String id)throws IOException {return removeToken(CacheKey.audioName(id));}
+    public long partialBytes(){long bytes=0;File[] files=staging.listFiles();if(files!=null)for(File file:files)if(file.getName().matches("[0-9a-f]{64}\\.audio\\.part") && file.isFile())bytes+=file.length();return bytes;}
+    public int cleanupPartials(long now)throws IOException{synchronized(AudioFileIndex.IO){if(transfers.get()!=0)return 0;AudioFileIndex registry=new AudioFileIndex(context);io.onloopio.db.MetadataStore metadata=new io.onloopio.db.MetadataStore(context);try{return PartialCleanup.sweep(staging,account,new io.onloopio.db.PartialStore(metadata),registry.publishing(account),now);}finally{metadata.close();registry.close();}}}
+    public void discardPartial(String id)throws IOException{for(int profile=0;profile<3;profile++){String token=AudioProfile.token(id,profile);File file=new File(staging,token+".part");if(file.isFile() && !file.delete())throw new IOException("Cannot remove partial download");io.onloopio.db.MetadataStore metadata=new io.onloopio.db.MetadataStore(context);try{new io.onloopio.db.PartialStore(metadata).clear(account,token);}finally{metadata.close();}}}
+    public boolean remove(String id)throws IOException {return removeToken(AudioProfile.token(id,profile));}
+    public static final class Artifact{public final String token;public final File file;Artifact(String t,File f){token=t;file=f;}}
+    public synchronized List<Artifact> artifacts(String song){List<Artifact> result=new java.util.ArrayList<Artifact>();for(int p=0;p<3;p++){String token=AudioProfile.token(song,p);File file=paths.get(token);if(file!=null)result.add(new Artifact(token,file));}return result;}
+    public boolean removeArtifact(String token)throws IOException{return removeToken(token);}
     private void prune(File dir)throws IOException {String base=root.getCanonicalPath()+File.separator;while(dir!=null && dir.getCanonicalPath().startsWith(base)){if(!dir.delete())break;dir=dir.getParentFile();}}
     public void clear()throws IOException {
         Set<String> tokens=new HashSet<String>();AudioFileIndex index=new AudioFileIndex(context);try{for(AudioFileIndex.Entry e:index.entries(account))tokens.add(e.token);}finally{index.close();}
@@ -91,24 +118,29 @@ public final class AudioCache {
         if(text.startsWith("fLaC"))return "flac";if(text.startsWith("RIFF"))return "wav";if(text.startsWith("OggS"))return "ogg";if(n>=8 && text.substring(4,8).equals("ftyp"))return "m4a";
         return fallback!=null && fallback.toLowerCase(java.util.Locale.US).matches("mp3|flac|m4a|aac|ogg|wav|ape|wma")?fallback.toLowerCase(java.util.Locale.US):"audio";
     }
-    public File obtain(Song song,NavidromeClient client,NavidromeClient.DownloadProgress listener)throws IOException {return obtain(song,client,listener,!originalSupported(song));}
-    public File obtain(String id,NavidromeClient client,NavidromeClient.DownloadProgress listener)throws IOException {return obtain(new Song(id,id,"Unknown artist","Unknown album","mp3",0),client,listener,false);}
+    public File obtain(Song song,NavidromeClient client,NavidromeClient.DownloadProgress listener)throws IOException {return obtain(song,client,listener,profile==AudioProfile.COMPACT || profile==AudioProfile.COMPATIBLE && !originalSupported(song));}
+    public File obtain(String id,NavidromeClient client,NavidromeClient.DownloadProgress listener)throws IOException {return obtain(new Song(id,id,"Unknown artist","Unknown album","mp3",0),client,listener);}
     private File obtain(final Song song,NavidromeClient client,final NavidromeClient.DownloadProgress listener,boolean mp3)throws IOException {
         if(song.local())return new File(song.localPath);refresh();if(contains(song))return file(song.id);
-        if(!staging.isDirectory() && !staging.mkdirs())throw new IOException("Cannot stage music download");final String token=CacheKey.audioName(song.id);File partial=new File(staging,token+"-"+System.nanoTime()+".part");
-        transfers.incrementAndGet();try{
+        if(!staging.isDirectory() && !staging.mkdirs())throw new IOException("Cannot stage music download");final String token=AudioProfile.token(song.id,profile);File partial=new File(staging,token+".part");
+        synchronized(AudioFileIndex.IO){transfers.incrementAndGet();}try{
             NavidromeClient.DownloadProgress progress=new NavidromeClient.DownloadProgress(){long lastCheck;public void bytes(long received,long total)throws IOException{if(received-lastCheck>=1024*1024 || lastCheck==0){lastCheck=received;if(freeBytes()<16L*1024*1024)throw new IOException("Not enough SD card space.");}if(listener!=null)listener.bytes(received,total);}};
-            if(mp3)client.downloadMp3(song.id,partial,512L*1024*1024,progress);else client.download(song.id,partial,512L*1024*1024,progress);
+            if(mp3 && profile!=AudioProfile.COMPACT)client.downloadMp3(song.id,partial,512L*1024*1024,progress);
+            else {final io.onloopio.db.MetadataStore metadata=new io.onloopio.db.MetadataStore(context);try{final io.onloopio.db.PartialStore journal=new io.onloopio.db.PartialStore(metadata);io.onloopio.api.ResumableDownload.State state=journal.load(account,token);client.downloadVariant(song.id,profile,partial,512L*1024*1024,state,new io.onloopio.api.ResumableDownload.Journal(){public void save(io.onloopio.api.ResumableDownload.State state){journal.save(account,token,state);}},progress);}finally{metadata.close();}}
             String extension=audioExtension(partial,song.suffix);FileInputStream header=new FileInputStream(partial);byte[] bytes=new byte[16];int length;try{length=header.read(bytes);}finally{header.close();}
             String prefix=new String(bytes,0,Math.max(length,0),"ISO-8859-1");
             boolean valid=prefix.startsWith("ID3")||prefix.startsWith("fLaC")||prefix.startsWith("RIFF")||prefix.startsWith("OggS")||prefix.startsWith("MAC ")||prefix.startsWith("wvpk")||prefix.startsWith("DSD ")||prefix.startsWith("FRM8")||prefix.startsWith("FORM")||length>=8 && prefix.substring(4,8).equals("ftyp")||length>=2 && (bytes[0]&255)==255 && (bytes[1]&224)==224;
             if(partial.length()<16 || !valid || "audio".equals(extension) || mp3 && !"mp3".equals(extension))throw new IOException("Unsupported or invalid audio file.");
+            if(listener!=null)listener.bytes(partial.length(),partial.length());
             synchronized(AudioFileIndex.IO){AudioFileIndex index=new AudioFileIndex(context);try{
+                if(listener!=null)listener.bytes(partial.length(),partial.length());
                 File target=destination(song,extension,token,index);AudioFileIndex.Entry previous=null;for(AudioFileIndex.Entry e:index.entries(account))if(e.token.equals(token))previous=e;
+                java.io.RandomAccessFile durable=new java.io.RandomAccessFile(partial,"rw");try{durable.getFD().sync();}finally{durable.close();}
+                index.beginPublication(account,token,partial,target);
                 index.record(account,token,target.getCanonicalPath(),partial.length(),partial.lastModified());
                 if(!partial.renameTo(target)){if(previous==null)index.forget(account,token);else index.record(account,token,previous.path,previous.bytes,previous.modified);throw new IOException("Cannot publish downloaded audio");}
-                refresh();return target;
+                index.finishPublication(account,token);io.onloopio.db.MetadataStore metadata=new io.onloopio.db.MetadataStore(context);try{new io.onloopio.db.PartialStore(metadata).clear(account,token);}finally{metadata.close();}refresh();return target;
             }finally{index.close();}}
-        }finally{if(partial.isFile())partial.delete();transfers.decrementAndGet();}
+        }finally{transfers.decrementAndGet();}
     }
 }

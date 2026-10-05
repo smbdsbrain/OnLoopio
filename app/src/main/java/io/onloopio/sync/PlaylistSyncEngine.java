@@ -22,8 +22,8 @@ public final class PlaylistSyncEngine {
         Library catalog()throws IOException;
     }
     public static final class Result {
-        public final int playlists,refreshed,queued;public final boolean catalog;
-        Result(int p,int r,int q,boolean c){playlists=p;refreshed=r;queued=q;catalog=c;}
+        public final int playlists,refreshed,queued;public final boolean catalog,catalogFailed;
+        Result(int p,int r,int q,boolean c,boolean failed){playlists=p;refreshed=r;queued=q;catalog=c;catalogFailed=failed;}
     }
     public Result check(MetadataStore store,String account,Source source,List<String> completedNames,long now,boolean full,Set<String> force)throws IOException {
         source.guard();List<Playlist> headers=source.playlists();Map<String,Playlist> old=new HashMap<String,Playlist>();for(Playlist p:store.playlists())old.put(p.id,p);
@@ -37,13 +37,10 @@ public final class PlaylistSyncEngine {
                 details.add(detail);
             }
         }
-        boolean needCatalog=full || !store.catalogSynced() || now-store.lastRefresh()>=AUDIT_INTERVAL;
-        // AudioMuse may first expose a newly added library track through a playlist.
-        // Refresh artists/albums/tracks along with that update rather than waiting for the daily pass.
-        if(!needCatalog)for(PlaylistDetail d:details)for(io.onloopio.model.Song song:d.songs)if(!store.hasCatalogSong(song.id)){needCatalog=true;break;}
-        source.guard();Library catalog=needCatalog?source.catalog():null;
-        source.guard();int queued=store.applyPlaylistSync(account,headers,details,catalog,completedNames,now,audit);
-        return new Result(headers.size(),details.size(),queued,catalog!=null);
+        source.guard();int queued=store.applyPlaylistSync(account,headers,details,null,completedNames,now,audit);
+        Library catalog=null;
+        boolean catalogFailed=false;if(full){source.guard();try{catalog=source.catalog();}catch(IOException failed){catalogFailed=true;}source.guard();if(!account.equals(store.accountKey()))throw new IOException("Account changed");if(catalog!=null)store.replaceCatalog(catalog);}
+        return new Result(headers.size(),details.size(),queued,catalog!=null,catalogFailed);
     }
     private boolean changed(Playlist a,Playlist b){return b.changed.length()==0 || !a.changed.equals(b.changed) || !a.name.equals(b.name) || a.songCount!=b.songCount || a.duration!=b.duration;}
 }

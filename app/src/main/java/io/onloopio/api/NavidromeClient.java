@@ -88,7 +88,7 @@ public final class NavidromeClient {
         byte[] saltBytes = new byte[16]; random.nextBytes(saltBytes);
         String salt = hex(saltBytes);
         String query = "u=" + encode(config.username) + "&t=" + authenticationToken(config.password, salt) +
-                "&s=" + salt + "&v=1.16.1&c=OnLoopio&f=xml" + (id == null ? "" : "&id=" + encode(id))+extra;
+                "&s=" + salt + "&v=1.16.1&c=OnLoopio&f="+("application/json".equals(accept)?"json":"xml") + (id == null ? "" : "&id=" + encode(id))+extra;
         HttpURLConnection connection = (HttpURLConnection) new URL(config.baseUrl + "/rest/" + method + ".view?" + query).openConnection();
         connection.setConnectTimeout(10000); connection.setReadTimeout(15000);
         connection.setInstanceFollowRedirects(false); connection.setUseCaches(false);
@@ -100,6 +100,17 @@ public final class NavidromeClient {
         return connection;
     }
     public interface DownloadProgress { void bytes(long received,long total) throws IOException; }
+    public io.onloopio.player.ReplayGain replayGain(String id)throws IOException{
+        HttpURLConnection c=connection("getSong",id,"application/json");InputStream in=null;
+        try{if(c.getResponseCode()!=200)throw new IOException("Gain metadata unavailable");in=c.getInputStream();ByteArrayOutputStream bytes=new ByteArrayOutputStream();byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1){if(Thread.currentThread().isInterrupted() || bytes.size()+n>65536)throw new IOException("Gain metadata limit");bytes.write(buffer,0,n);}return parseReplayGain(bytes.toByteArray(),id);}
+        finally{if(in!=null)try{in.close();}catch(IOException ignored){}c.disconnect();}
+    }
+    public static io.onloopio.player.ReplayGain parseReplayGain(byte[] bytes,String id)throws IOException{
+        if(bytes.length>65536)throw new IOException("Gain metadata limit");int depth=0;boolean quoted=false,escaped=false;for(byte b:bytes){int ch=b&255;if(quoted){if(escaped)escaped=false;else if(ch=='\\')escaped=true;else if(ch=='"')quoted=false;}else if(ch=='"')quoted=true;else if(ch=='{' || ch=='['){if(++depth>32)throw new IOException("Gain JSON depth limit");}else if(ch=='}' || ch==']')depth--;}
+        try{org.json.JSONObject response=new org.json.JSONObject(new String(bytes,"UTF-8")).getJSONObject("subsonic-response");if(!"ok".equals(response.getString("status")))throw new IOException("Gain response failed");org.json.JSONObject song=response.getJSONObject("song");if(!id.equals(song.getString("id")))throw new IOException("Gain song mismatch");org.json.JSONObject gain=song.optJSONObject("replayGain");if(gain==null)return new io.onloopio.player.ReplayGain(null,null,null,null,null,null);return new io.onloopio.player.ReplayGain(optionalGain(gain,"trackGain"),optionalGain(gain,"albumGain"),optionalGain(gain,"trackPeak"),optionalGain(gain,"albumPeak"),optionalGain(gain,"baseGain"),optionalGain(gain,"fallbackGain"));}
+        catch(org.json.JSONException invalid){throw new IOException("Invalid gain JSON");}
+    }
+    private static Double optionalGain(org.json.JSONObject json,String key){if(!json.has(key) || json.isNull(key))return null;Object value=json.opt(key);return value instanceof Number?io.onloopio.player.ReplayGain.finite(((Number)value).doubleValue()):null;}
     /** Bounded binary cover retrieval with the same verified TLS and authentication. */
     public byte[] cover(String id) throws IOException {
         HttpURLConnection c=connection("getCoverArt",id,"image/*","&size=256"); InputStream input=null;
@@ -137,6 +148,10 @@ public final class NavidromeClient {
     /** Save a compatible MP3 through Navidrome's stream transcoder for codecs absent on Y1. */
     public void downloadMp3(String id,File partial,long maximum,DownloadProgress progress) throws IOException {
         transfer(connection("stream",id,"audio/mpeg","&format=mp3&maxBitRate=320"),partial,maximum,progress);
+    }
+    public void downloadVariant(final String id,int profile,File partial,long maximum,ResumableDownload.State state,ResumableDownload.Journal journal,DownloadProgress progress)throws IOException{
+        if(profile==io.onloopio.player.AudioProfile.COMPACT){transfer(connection("stream",id,"audio/mpeg","&format=mp3&maxBitRate=192"),partial,maximum,progress);return;}
+        ResumableDownload.transfer(new ResumableDownload.Source(){public HttpURLConnection open()throws IOException{return connection("download",id,"application/octet-stream");}},partial,maximum,state,journal,progress);
     }
     private void transfer(HttpURLConnection connection,File partial,long maximum,DownloadProgress progress) throws IOException {
         InputStream input=null; FileOutputStream output=null; boolean complete=false;
