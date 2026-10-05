@@ -68,6 +68,6 @@ public final class FeedbackStoreTest extends InstrumentationTestCase {
     public void testV8MigrationPreservesMetadataQueueAndStatistics(){
         store.pin(Collections.singletonList("a"),true);store.listened("a",456);store.enqueueDownloads(Collections.singletonList("a"));
         android.database.sqlite.SQLiteDatabase db=store.getWritableDatabase();db.execSQL("DROP TABLE track_like");db.execSQL("DROP TABLE listen_event");for(String table:new String[]{"playback_session","queue_entry","attempt_ledger","offline_generation","offline_member","offline_pointer","listen_history","feedback_retry","audio_partial","replay_gain","audio_artifact","artifact_gain"})db.execSQL("DROP TABLE "+table);db.setVersion(8);store.close();store=new MetadataStore(isolated);
-        assertEquals(19,store.getReadableDatabase().getVersion());assertNotNull(store.song("a"));assertTrue(store.audioState("a").pinned);assertEquals(456L,store.audioState("a").lastPlayed);assertEquals(1,store.audioState("a").plays);assertEquals(1,store.pendingDownloads());assertEquals(0,store.pendingFeedback("account"));
+        assertEquals(20,store.getReadableDatabase().getVersion());assertNotNull(store.song("a"));assertTrue(store.audioState("a").pinned);assertEquals(456L,store.audioState("a").lastPlayed);assertEquals(1,store.audioState("a").plays);assertEquals(1,store.pendingDownloads());assertEquals(0,store.pendingFeedback("account"));
     }
 }

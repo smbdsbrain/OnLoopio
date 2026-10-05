@@ -82,7 +82,7 @@ public final class PlaylistSyncTest extends InstrumentationTestCase {
             legacy.execSQL("CREATE TABLE audio_state (song_id TEXT PRIMARY KEY,downloaded_at INTEGER,last_played INTEGER,play_count INTEGER,pinned INTEGER)");legacy.execSQL("INSERT INTO audio_state VALUES ('a',123,456,2,1)");legacy.setVersion(6);
         }finally{legacy.close();}
         RenamingDelegatingContext context=new RenamingDelegatingContext(target,"sync_v6_test_");context.makeExistingFilesAndDbsAccessible();MetadataStore migrated=new MetadataStore(context);
-        try{assertEquals(19,migrated.getReadableDatabase().getVersion());assertEquals("Existing",migrated.playlists().get(0).name);assertEquals(555L,migrated.lastRefresh());assertEquals(0L,migrated.lastPlaylistCheck());assertFalse(migrated.followsPlaylist("p"));migrated.followPlaylist("p",true);assertTrue(migrated.followsPlaylist("p"));assertTrue(migrated.audioState("a").pinned);assertEquals(456L,migrated.audioState("a").lastPlayed);}
+        try{assertEquals(20,migrated.getReadableDatabase().getVersion());assertEquals("Existing",migrated.playlists().get(0).name);assertEquals(555L,migrated.lastRefresh());assertEquals(0L,migrated.lastPlaylistCheck());assertFalse(migrated.followsPlaylist("p"));migrated.followPlaylist("p",true);assertTrue(migrated.followsPlaylist("p"));assertTrue(migrated.audioState("a").pinned);assertEquals(456L,migrated.audioState("a").lastPlayed);}
         finally{migrated.close();target.deleteDatabase(filename);}
     }
 }

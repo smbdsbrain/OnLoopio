@@ -141,7 +141,7 @@ public final class MetadataTest extends InstrumentationTestCase {
             legacy.execSQL("CREATE TABLE download_queue (song_id TEXT PRIMARY KEY,position INTEGER,state INTEGER)");legacy.execSQL("INSERT INTO download_queue VALUES ('legacy',0,0)");legacy.setVersion(5);
         }finally{legacy.close();}
         RenamingDelegatingContext context=new RenamingDelegatingContext(target,prefix);context.makeExistingFilesAndDbsAccessible();MetadataStore upgraded=new MetadataStore(context);
-        try{assertEquals(19,upgraded.getReadableDatabase().getVersion());assertEquals(1,upgraded.catalogCount());Song song=upgraded.song("legacy");assertEquals("Title",song.title);assertEquals("",song.coverArt);assertEquals("legacy",upgraded.nextDownload());assertEquals(-1L,upgraded.downloads().get(0).total);upgraded.pin(Arrays.asList(song.id),true);assertTrue(upgraded.audioState(song.id).pinned);assertEquals("Migration should refresh missing covers",0L,upgraded.lastRefresh());}
+        try{assertEquals(20,upgraded.getReadableDatabase().getVersion());assertEquals(1,upgraded.catalogCount());Song song=upgraded.song("legacy");assertEquals("Title",song.title);assertEquals("",song.coverArt);assertEquals("legacy",upgraded.nextDownload());assertEquals(-1L,upgraded.downloads().get(0).total);upgraded.pin(Arrays.asList(song.id),true);assertTrue(upgraded.audioState(song.id).pinned);assertEquals("Migration should refresh missing covers",0L,upgraded.lastRefresh());}
         finally{upgraded.close();target.deleteDatabase(prefix+"onloopio.db");}
     }
 }
