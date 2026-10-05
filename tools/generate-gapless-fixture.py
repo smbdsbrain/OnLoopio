@@ -12,7 +12,7 @@ if a.signal=='noise':
 if a.signal=='music':
     source=random.Random(17017);samples=[]
     for n in range(rate*2):
-        t=n/rate;note=int(t*4);phase=t-note/4;frequency=[220,261.625565,329.627557,293.664768][note%4]
+        t=n/rate;note=int(t*4);phase=t-note/4;frequency=[220,261.625565,329.627557,293.664768,246.941651,349.228231,391.995436,440][note%8]
         pluck=sum(math.sin(2*math.pi*frequency*k*phase)/k for k in range(1,5))*math.exp(-phase*12)
         percussion=source.uniform(-1,1)*math.exp(-phase*70)
         samples.append(pluck+.3*percussion)
